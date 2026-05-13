@@ -1348,6 +1348,103 @@ class KinematicChain:
             last_metrics,
         )
 
+    def solve_sew_seeded_functional_hybrid(
+        self,
+        target,
+        desired_rotation,
+        wrist_base,
+        elbow_base,
+        shoulder_base,
+        seed,
+        sew_elbow_target,
+        sew_metrics,
+        robot_shoulder_anchor,
+        elbow_joint_index=3,
+        shoulder_joint_index=None,
+        seed_iterations=36,
+        seed_primary_damping=0.040,
+        seed_secondary_damping=0.070,
+        seed_orientation_weight=0.0,
+        seed_elbow_weight=0.32,
+        seed_secondary_step_scale=0.80,
+        seed_max_step=0.090,
+        seed_elbow_tolerance=0.080,
+        functional_iterations=70,
+        functional_primary_damping=0.045,
+        functional_secondary_damping=0.075,
+        position_tolerance=0.014,
+        forearm_tolerance=1.20,
+        upper_arm_tolerance=1.45,
+        forearm_weight=0.08,
+        upper_arm_weight=0.04,
+        included_angle_weight=0.12,
+        functional_secondary_step_scale=0.45,
+        functional_max_step=0.080,
+        finite_difference_step=1e-4,
+        secondary_position_guard=0.045,
+    ):
+        elbow_joint_index = int(elbow_joint_index)
+        q_seed, seed_converged, seed_error, seed_orientation_error, seed_elbow_error = self.solve_full_arm_hierarchical(
+            target,
+            desired_rotation,
+            sew_elbow_target,
+            seed,
+            elbow_joint_index=elbow_joint_index,
+            iterations=int(seed_iterations),
+            primary_damping=float(seed_primary_damping),
+            secondary_damping=float(seed_secondary_damping),
+            position_tolerance=float(position_tolerance),
+            orientation_tolerance=1.0,
+            elbow_tolerance=float(seed_elbow_tolerance),
+            orientation_weight=float(seed_orientation_weight),
+            elbow_weight=float(seed_elbow_weight),
+            secondary_step_scale=float(seed_secondary_step_scale),
+            max_step=float(seed_max_step),
+        )
+        q, converged, error, forearm_error, upper_error, functional_metrics = self.solve_functional_hierarchical(
+            target,
+            wrist_base,
+            elbow_base,
+            shoulder_base,
+            q_seed,
+            robot_shoulder_anchor=robot_shoulder_anchor,
+            elbow_joint_index=elbow_joint_index,
+            shoulder_joint_index=shoulder_joint_index,
+            iterations=int(functional_iterations),
+            primary_damping=float(functional_primary_damping),
+            secondary_damping=float(functional_secondary_damping),
+            position_tolerance=float(position_tolerance),
+            forearm_tolerance=float(forearm_tolerance),
+            upper_arm_tolerance=float(upper_arm_tolerance),
+            forearm_weight=float(forearm_weight),
+            upper_arm_weight=float(upper_arm_weight),
+            included_angle_weight=float(included_angle_weight),
+            secondary_step_scale=float(functional_secondary_step_scale),
+            max_step=float(functional_max_step),
+            finite_difference_step=float(finite_difference_step),
+            secondary_position_guard=float(secondary_position_guard),
+        )
+
+        _, final_joint_positions, _ = self.fk(q)
+        hybrid_metrics = dict(sew_metrics or {})
+        hybrid_metrics.update(functional_metrics or {})
+        hybrid_metrics.update(
+            {
+                "hybrid_seed_converged": bool(seed_converged),
+                "hybrid_seed_position_error_m": float(seed_error),
+                "hybrid_seed_orientation_error_rad": float(seed_orientation_error),
+                "hybrid_seed_elbow_target_error_m": float(seed_elbow_error),
+                "hybrid_final_elbow_target_error_m": float(
+                    np.linalg.norm(np.asarray(sew_elbow_target, dtype=float) - final_joint_positions[elbow_joint_index])
+                ),
+                "hybrid_seed_to_final_joint_delta_rad": float(np.linalg.norm(q - q_seed)),
+                "sew_elbow_target_error_m": float(
+                    np.linalg.norm(np.asarray(sew_elbow_target, dtype=float) - final_joint_positions[elbow_joint_index])
+                ),
+            }
+        )
+        return q, converged, float(error), float(forearm_error), float(upper_error), hybrid_metrics
+
 
 def world_to_robot_base(point_world):
     c = math.cos(-ROBOT_WORLD_YAW)
@@ -2032,6 +2129,7 @@ def build_trajectory(chain, seed, seconds, fps, reconstructed_trajectory=None, c
                     "table_edge_soft_functional",
                     "ocra_baseline",
                     "sew_mimic_geometric",
+                    "sew_functional_hybrid",
                 ) and arm.get("right_elbow_world") is not None:
                     wrist_base = observed_target
                     elbow_base = global_workspace_transform_base(world_to_robot_base(arm["right_elbow_world"]))
@@ -2046,7 +2144,7 @@ def build_trajectory(chain, seed, seconds, fps, reconstructed_trajectory=None, c
                         desired_rotation = forearm_aligned_rotation_base(wrist_base, elbow_base, shoulder_base)
                     if orientation_mode in ("full_arm_aligned", "full_arm_hierarchical") and shoulder_base is not None:
                         full_arm_elbow_target = full_arm_elbow_target_base(wrist_base, shoulder_base, elbow_base)
-                    elif orientation_mode == "sew_mimic_geometric" and shoulder_base is not None:
+                    elif orientation_mode in ("sew_mimic_geometric", "sew_functional_hybrid") and shoulder_base is not None:
                         full_arm_elbow_target, sew_mimic_metrics = sew_mimic_elbow_target_base(
                             wrist_base,
                             shoulder_base,
@@ -2140,8 +2238,12 @@ def build_trajectory(chain, seed, seconds, fps, reconstructed_trajectory=None, c
                     secondary_damping=float(functional_config.get("secondary_damping", 0.075)),
                     position_tolerance=float(ik_config.get("position_tolerance", 0.014)),
                     orientation_tolerance=float(ik_config.get("orientation_tolerance", 0.30)),
-                    forearm_tolerance=math.radians(float(functional_config.get("forearm_tolerance_deg", 70.0))),
-                    upper_arm_tolerance=math.radians(float(functional_config.get("upper_arm_tolerance_deg", 85.0))),
+                    forearm_tolerance=math.radians(
+                        float(hybrid_config.get("functional_forearm_tolerance_deg", functional_config.get("forearm_tolerance_deg", 70.0)))
+                    ),
+                    upper_arm_tolerance=math.radians(
+                        float(hybrid_config.get("functional_upper_arm_tolerance_deg", functional_config.get("upper_arm_tolerance_deg", 85.0)))
+                    ),
                     anti_self_tolerance=float(anti_config.get("tolerance", 0.02)),
                     orientation_weight=float(ik_config.get("orientation_weight", 0.18)),
                     forearm_weight=float(functional_config.get("forearm_weight", 0.20)),
@@ -2288,6 +2390,55 @@ def build_trajectory(chain, seed, seconds, fps, reconstructed_trajectory=None, c
                             if cscore < best[0]:
                                 best = (cscore, cq, cconverged, cerror, corientation, celbow, cmetrics)
                         _, q, converged, error, orientation_error, elbow_error, functional_metrics = best
+            elif orientation_mode == "sew_functional_hybrid" and full_arm_elbow_target is not None:
+                sew_config = RETARGET_RUNTIME_CONFIG.get("sew_mimic", {})
+                hybrid_config = RETARGET_RUNTIME_CONFIG.get("hybrid", {})
+                functional_config = RETARGET_RUNTIME_CONFIG.get("functional", {})
+                q, converged, error, orientation_error, elbow_error, functional_metrics = chain.solve_sew_seeded_functional_hybrid(
+                    target,
+                    desired_rotation,
+                    wrist_base,
+                    elbow_base,
+                    shoulder_base,
+                    q,
+                    full_arm_elbow_target,
+                    sew_mimic_metrics,
+                    robot_shoulder_anchor=robot_shoulder_anchor_base(),
+                    elbow_joint_index=int(sew_config.get("robot_elbow_joint_index", robot_elbow_joint_index())),
+                    shoulder_joint_index=robot_shoulder_joint_index(),
+                    seed_iterations=int(hybrid_config.get("seed_iterations", sew_config.get("max_iterations", 36))),
+                    seed_primary_damping=float(hybrid_config.get("seed_primary_damping", sew_config.get("primary_damping", 0.040))),
+                    seed_secondary_damping=float(hybrid_config.get("seed_secondary_damping", sew_config.get("secondary_damping", 0.070))),
+                    seed_orientation_weight=float(hybrid_config.get("seed_orientation_weight", sew_config.get("orientation_weight", 0.0))),
+                    seed_elbow_weight=float(hybrid_config.get("seed_elbow_weight", sew_config.get("elbow_weight", 0.32))),
+                    seed_secondary_step_scale=float(
+                        hybrid_config.get("seed_secondary_step_scale", sew_config.get("secondary_step_scale", 0.80))
+                    ),
+                    seed_max_step=float(hybrid_config.get("seed_max_step", sew_config.get("max_step", 0.090))),
+                    seed_elbow_tolerance=float(hybrid_config.get("seed_elbow_tolerance", sew_config.get("elbow_tolerance", 0.080))),
+                    functional_iterations=int(hybrid_config.get("functional_iterations", ik_config.get("max_iterations", 70))),
+                    functional_primary_damping=float(functional_config.get("primary_damping", 0.045)),
+                    functional_secondary_damping=float(functional_config.get("secondary_damping", 0.075)),
+                    position_tolerance=float(ik_config.get("position_tolerance", 0.014)),
+                    forearm_tolerance=math.radians(
+                        float(hybrid_config.get("functional_forearm_tolerance_deg", functional_config.get("forearm_tolerance_deg", 70.0)))
+                    ),
+                    upper_arm_tolerance=math.radians(
+                        float(hybrid_config.get("functional_upper_arm_tolerance_deg", functional_config.get("upper_arm_tolerance_deg", 85.0)))
+                    ),
+                    forearm_weight=float(functional_config.get("forearm_weight", 0.08)),
+                    upper_arm_weight=float(functional_config.get("upper_arm_weight", 0.04)),
+                    included_angle_weight=float(functional_config.get("included_angle_weight", 0.12)),
+                    functional_secondary_step_scale=float(functional_config.get("secondary_step_scale", 0.45)),
+                    functional_max_step=float(functional_config.get("max_step", 0.080)),
+                    finite_difference_step=float(functional_config.get("finite_difference_step", 1e-4)),
+                    secondary_position_guard=float(functional_config.get("secondary_position_guard", 0.045)),
+                )
+                solver_metrics = dict(functional_metrics or {})
+                functional_metrics = compute_functional_metrics(chain, q, wrist_base, elbow_base, shoulder_base)
+                functional_metrics.update(solver_metrics)
+                orientation_error = functional_metrics["forearm_max_rad"]
+                elbow_error = functional_metrics["upper_arm_max_rad"]
             elif orientation_mode == "sew_mimic_geometric" and full_arm_elbow_target is not None:
                 sew_config = RETARGET_RUNTIME_CONFIG.get("sew_mimic", {})
                 elbow_joint_index = int(sew_config.get("robot_elbow_joint_index", robot_elbow_joint_index()))
@@ -2394,7 +2545,7 @@ def build_trajectory(chain, seed, seconds, fps, reconstructed_trajectory=None, c
             solver_metric_overrides = {
                 key: value
                 for key, value in (functional_metrics or {}).items()
-                if key.startswith(("ocra_", "sew_"))
+                if key.startswith(("ocra_", "sew_", "hybrid_"))
             }
             functional_metrics = compute_functional_metrics(chain, q, wrist_base, elbow_base, shoulder_base)
             functional_metrics.update(solver_metric_overrides)
@@ -2410,6 +2561,9 @@ def build_trajectory(chain, seed, seconds, fps, reconstructed_trajectory=None, c
                 elbow_error = float(functional_metrics.get("ocra_skeleton_rmse_m", elbow_error or 0.0))
             elif orientation_mode == "sew_mimic_geometric":
                 elbow_error = float(functional_metrics.get("sew_elbow_target_error_m", elbow_error or 0.0))
+            elif orientation_mode == "sew_functional_hybrid":
+                orientation_error = functional_metrics["forearm_max_rad"]
+                elbow_error = functional_metrics["upper_arm_max_rad"]
         diagnostics.append(
             {
                 "time": round(t, 4),
@@ -2906,6 +3060,7 @@ def main():
                 "table_edge_soft_functional",
                 "ocra_baseline",
                 "sew_mimic_geometric",
+                "sew_functional_hybrid",
             ) and arm.get("right_elbow_world") is not None:
                 wrist_base = target
                 elbow_base = global_workspace_transform_base(world_to_robot_base(arm["right_elbow_world"]))
@@ -2920,7 +3075,7 @@ def main():
                     desired_rotation = forearm_aligned_rotation_base(wrist_base, elbow_base, shoulder_base)
                 if orientation_mode in ("full_arm_aligned", "full_arm_hierarchical") and shoulder_base is not None:
                     full_arm_elbow_target = full_arm_elbow_target_base(wrist_base, shoulder_base, elbow_base)
-                elif orientation_mode == "sew_mimic_geometric" and shoulder_base is not None:
+                elif orientation_mode in ("sew_mimic_geometric", "sew_functional_hybrid") and shoulder_base is not None:
                     full_arm_elbow_target, sew_mimic_metrics = sew_mimic_elbow_target_base(
                         wrist_base,
                         shoulder_base,
@@ -2931,6 +3086,51 @@ def main():
                 q, converged, error = chain.solve_position(target, current_q)
                 orientation_error = None
                 elbow_error = None
+            elif orientation_mode == "sew_functional_hybrid" and full_arm_elbow_target is not None:
+                sew_config = RETARGET_RUNTIME_CONFIG.get("sew_mimic", {})
+                hybrid_config = RETARGET_RUNTIME_CONFIG.get("hybrid", {})
+                functional_config = RETARGET_RUNTIME_CONFIG.get("functional", {})
+                q, converged, error, orientation_error, elbow_error, functional_metrics = chain.solve_sew_seeded_functional_hybrid(
+                    target,
+                    desired_rotation,
+                    wrist_base,
+                    elbow_base,
+                    shoulder_base,
+                    current_q,
+                    full_arm_elbow_target,
+                    sew_mimic_metrics,
+                    robot_shoulder_anchor=robot_shoulder_anchor_base(),
+                    elbow_joint_index=int(sew_config.get("robot_elbow_joint_index", robot_elbow_joint_index())),
+                    shoulder_joint_index=robot_shoulder_joint_index(),
+                    seed_iterations=int(hybrid_config.get("seed_iterations", sew_config.get("max_iterations", 36))),
+                    seed_primary_damping=float(hybrid_config.get("seed_primary_damping", sew_config.get("primary_damping", 0.040))),
+                    seed_secondary_damping=float(hybrid_config.get("seed_secondary_damping", sew_config.get("secondary_damping", 0.070))),
+                    seed_orientation_weight=float(hybrid_config.get("seed_orientation_weight", sew_config.get("orientation_weight", 0.0))),
+                    seed_elbow_weight=float(hybrid_config.get("seed_elbow_weight", sew_config.get("elbow_weight", 0.32))),
+                    seed_secondary_step_scale=float(
+                        hybrid_config.get("seed_secondary_step_scale", sew_config.get("secondary_step_scale", 0.80))
+                    ),
+                    seed_max_step=float(hybrid_config.get("seed_max_step", sew_config.get("max_step", 0.090))),
+                    seed_elbow_tolerance=float(hybrid_config.get("seed_elbow_tolerance", sew_config.get("elbow_tolerance", 0.080))),
+                    functional_iterations=int(hybrid_config.get("functional_iterations", ik_config.get("max_iterations", 70))),
+                    functional_primary_damping=float(functional_config.get("primary_damping", 0.045)),
+                    functional_secondary_damping=float(functional_config.get("secondary_damping", 0.075)),
+                    position_tolerance=float(ik_config.get("position_tolerance", 0.014)),
+                    forearm_tolerance=math.radians(float(functional_config.get("forearm_tolerance_deg", 70.0))),
+                    upper_arm_tolerance=math.radians(float(functional_config.get("upper_arm_tolerance_deg", 85.0))),
+                    forearm_weight=float(functional_config.get("forearm_weight", 0.08)),
+                    upper_arm_weight=float(functional_config.get("upper_arm_weight", 0.04)),
+                    included_angle_weight=float(functional_config.get("included_angle_weight", 0.12)),
+                    functional_secondary_step_scale=float(functional_config.get("secondary_step_scale", 0.45)),
+                    functional_max_step=float(functional_config.get("max_step", 0.080)),
+                    finite_difference_step=float(functional_config.get("finite_difference_step", 1e-4)),
+                    secondary_position_guard=float(functional_config.get("secondary_position_guard", 0.045)),
+                )
+                solver_metrics = dict(functional_metrics or {})
+                functional_metrics = compute_functional_metrics(chain, q, wrist_base, elbow_base, shoulder_base)
+                functional_metrics.update(solver_metrics)
+                orientation_error = functional_metrics["forearm_max_rad"]
+                elbow_error = functional_metrics["upper_arm_max_rad"]
             elif orientation_mode == "sew_mimic_geometric" and full_arm_elbow_target is not None:
                 sew_config = RETARGET_RUNTIME_CONFIG.get("sew_mimic", {})
                 elbow_joint_index = int(sew_config.get("robot_elbow_joint_index", robot_elbow_joint_index()))
@@ -3133,6 +3333,8 @@ def main():
                         f" sew_elbow={functional_metrics['sew_elbow_target_error_m']:.3f}"
                         f" sew_clamped={functional_metrics.get('sew_reach_was_clamped', False)}"
                     )
+                if "hybrid_seed_to_final_joint_delta_rad" in functional_metrics:
+                    sew_text += f" hybrid_dq={functional_metrics['hybrid_seed_to_final_joint_delta_rad']:.3f}"
                 functional_text = (
                     f" forearm_deg={forearm_deg} upper_deg={upper_deg}"
                     f" anti={anti_penalty:.3f} align={anti_alignment:.3f} tool={tool_alignment:.3f}"
@@ -3223,6 +3425,17 @@ def main():
                     f"elbow_target_mean_m={mean_sew_elbow:.4f} elbow_target_max_m={max_sew_elbow:.4f} "
                     f"target_included_mean_deg={mean_sew_included:.1f} reach_clamped_frames={clamped_count}"
                 )
+            hybrid_items = [item for item in functional_items if "hybrid_seed_to_final_joint_delta_rad" in item]
+            if hybrid_items:
+                mean_hybrid_delta = sum(float(item["hybrid_seed_to_final_joint_delta_rad"]) for item in hybrid_items) / len(hybrid_items)
+                max_hybrid_delta = max(float(item["hybrid_seed_to_final_joint_delta_rad"]) for item in hybrid_items)
+                mean_seed_error = sum(float(item["hybrid_seed_position_error_m"]) for item in hybrid_items) / len(hybrid_items)
+                print(
+                    "sew_functional_hybrid "
+                    f"seed_position_mean_m={mean_seed_error:.4f} "
+                    f"seed_to_final_joint_delta_mean_rad={mean_hybrid_delta:.3f} "
+                    f"seed_to_final_joint_delta_max_rad={max_hybrid_delta:.3f}"
+                )
         for item in diagnostics[:: max(1, int(args.fps))]:
             orientation_text = ""
             if item["orientation_error"] is not None:
@@ -3250,6 +3463,8 @@ def main():
                         f" sew_elbow={functional['sew_elbow_target_error_m']:.3f}"
                         f" sew_clamped={functional.get('sew_reach_was_clamped', False)}"
                     )
+                if "hybrid_seed_to_final_joint_delta_rad" in functional:
+                    sew_text += f" hybrid_dq={functional['hybrid_seed_to_final_joint_delta_rad']:.3f}"
                 functional_text = (
                     f" forearm_deg={forearm_deg} upper_deg={upper_deg}"
                     f" anti={anti_penalty:.3f} align={anti_alignment:.3f} tool={tool_alignment:.3f}"

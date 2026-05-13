@@ -27,14 +27,14 @@ recordings/
 *.jpg
 *.jpeg
 *.ppm
+!xarm_ros2/xarm_gazebo/models/smplx_operator/meshes/*.png
 
 # Research PDFs are local reference material, keep only indexes/notes in git.
 research_papers/**/pdfs/
 
-# SMPL-X / VPoser / generated mesh assets are large and/or separately licensed.
+# Raw SMPL-X / VPoser assets are local-only. The static Gazebo OBJ/texture
+# under smplx_operator/meshes is small enough to track.
 xarm_ros2/.git/
-xarm_ros2/xarm_gazebo/models/smplx_operator/meshes/*
-!xarm_ros2/xarm_gazebo/models/smplx_operator/meshes/.gitkeep
 xarm_ros2/xarm_gazebo/models/smplx_operator/support/
 xarm_ros2/xarm_gazebo/models/smplx_operator_animation/meshes/
 xarm_ros2/xarm_gazebo/models/smplx_operator_animation/animation_manifest.json

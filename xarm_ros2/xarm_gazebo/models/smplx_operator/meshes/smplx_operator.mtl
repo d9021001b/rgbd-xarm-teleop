@@ -1,0 +1,7 @@
+newmtl smplx_uv_material
+Ka 1.000 1.000 1.000
+Kd 1.000 1.000 1.000
+Ks 0.050 0.050 0.050
+Ns 10.000
+d 1.000
+map_Kd smplx_texture_m_2023.png

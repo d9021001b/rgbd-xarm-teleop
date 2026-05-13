@@ -40,8 +40,8 @@ the retargeting code path:
   SMPL-X operator visual.
 - The Gazebo SMPL-X visual mesh and texture files under
   `xarm_ros2/xarm_gazebo/models/smplx_operator/meshes/`.
-- Retargeting scripts, calibration configs, OCRA-style baseline config, and
-  documentation.
+- Retargeting scripts, calibration configs, OCRA-style, SEW-Mimic-style,
+  RGB-D DLS, and SEW-functional hybrid baseline configs, and documentation.
 
 The following files are intentionally **not** tracked in git. Users who need
 the full HMR / SMPLify-X / mesh-fitting pipeline must download or generate

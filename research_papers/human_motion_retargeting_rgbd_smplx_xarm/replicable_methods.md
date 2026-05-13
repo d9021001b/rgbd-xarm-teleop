@@ -46,7 +46,7 @@ D455 / taichi video
 | Current method | 目前 calibrated functional objective | 作為主方法 |
 | OCRA-style baseline | hand orientation + arm skeleton weighted objective | 姿態相似度、TCP error、每幀時間 |
 | SEW-Mimic-style baseline | shoulder-elbow-wrist closed-form / geometric solver | 每幀時間、姿態相似度、是否可達 |
-| RGB-D DLS baseline | MediaPipe + depth deprojection + DLS IK，不經 SMPL-X | 與 SMPL-X 中介比較穩定度 |
+| RGB-D DLS baseline | MediaPipe + depth deprojection + DLS IK，不經 SMPL-X 姿態控制 | 與 SMPL-X / SEW / functional 中介比較速度、TCP 精度與手臂姿態一致性 |
 | MIRROR-style candidate IK | 多 seed / continuation / safety candidate selection | local minima、self-insertion、解算時間 |
 | TelePreview mode | preview-only -> execute gate | 安全性、demo 可解釋性 |
 
@@ -76,6 +76,17 @@ RGB-D / SMPL-X reconstructed human motion
 1. OCRA-style baseline：已完成第一版復刻，見 `docs/ocra_style_baseline_zh.md` 與 `configs/xarm7_ocra_baseline_no_moveit.json`。
 2. SEW-Mimic-style solver：已完成第一版 geometric elbow-swivel baseline，見 `docs/sew_mimic_style_baseline_zh.md` 與 `configs/xarm7_sew_mimic_baseline_no_moveit.json`。
 3. SEW + functional hybrid：已完成第一版 SEW seed + null-space correction，見 `docs/sew_functional_hybrid_zh.md` 與 `configs/xarm7_sew_functional_hybrid_no_moveit.json`。
-4. RGB-D DLS baseline：建立不經 SMPL-X 的對照組，證明 SMPL-X 中介是否值得。
+4. RGB-D DLS baseline：已完成第一版 hand/TCP-only DLS baseline，見 `docs/rgbd_dls_baseline_zh.md` 與 `configs/xarm7_rgbd_dls_baseline_no_moveit.json`。
 5. TelePreview mode：把 Gazebo preview gate 做成正式展示流程。
 6. MIRROR-style parallel candidate IK：作為高階即時化改造。
+
+## 已完成 baseline 摘要
+
+| 方法 | 主要控制目標 | Runtime / 181 frames | TCP mean / max | Included-angle mean | Forearm mean-max | Upper mean-max |
+|---|---|---:|---:|---:|---:|---:|
+| OCRA-style | skeleton + hand orientation weighted optimization | 288.54 s | 6.44 cm / 18.43 cm | 30.56 deg | 44.65 deg | 68.72 deg |
+| SEW-Mimic-style | geometric elbow-swivel + TCP | 9.06 s | 0.10 mm / 4.14 mm | 19.89 deg | 83.39 deg | 49.33 deg |
+| SEW + functional hybrid | SEW seed + TCP-hard null-space correction | 14.72 s | 1.54 mm / 22.84 mm | 4.42 deg | 25.14 deg | 41.53 deg |
+| RGB-D DLS baseline | RGB-D hand target + DLS TCP-only IK + EMA | 6.07 s | 8.35 mm / 48.70 mm | 17.33 deg | 56.30 deg | 57.63 deg |
+
+目前結論：RGB-D DLS 是最快的直接 hand-shadowing baseline，但因為只追 TCP，不會自然保證上臂/前臂構型像人；SEW + functional hybrid 在速度仍可接受的情況下，對 included-angle 與 forearm functional matching 最穩。

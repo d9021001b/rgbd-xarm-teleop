@@ -431,6 +431,66 @@ class KinematicChain:
         transform, _, _ = self.fk(q)
         return q, False, float(np.linalg.norm(np.asarray(target, dtype=float) - transform[:3, 3]))
 
+    def solve_rgbd_dls_position(
+        self,
+        target,
+        seed,
+        iterations=100,
+        damping=0.045,
+        tolerance=0.001,
+        max_step=0.08,
+        joint_regularization_weight=0.0,
+    ):
+        q = np.asarray(seed, dtype=float).copy()
+        rest_q = q.copy()
+        target = np.asarray(target, dtype=float)
+        iteration_count = 0
+        for iteration_count in range(1, int(iterations) + 1):
+            transform, joint_positions, joint_axes = self.fk(q)
+            tip = transform[:3, 3]
+            position_error = target - tip
+            error_norm = float(np.linalg.norm(position_error))
+            if error_norm < tolerance:
+                metrics = {
+                    "rgbd_dls_position_error_m": error_norm,
+                    "rgbd_dls_iterations": iteration_count - 1,
+                    "rgbd_dls_converged_raw": True,
+                    "rgbd_dls_damping": float(damping),
+                    "rgbd_dls_joint_regularization_weight": float(joint_regularization_weight),
+                }
+                return q, True, error_norm, metrics
+            jacobian = np.zeros((3, len(q)), dtype=float)
+            for idx, (origin, axis) in enumerate(zip(joint_positions, joint_axes)):
+                jacobian[:, idx] = np.cross(axis, tip - origin)
+            if joint_regularization_weight > 0.0:
+                weighted_jacobian = np.vstack(
+                    [jacobian, float(joint_regularization_weight) * np.eye(len(q), dtype=float)]
+                )
+                weighted_error = np.concatenate(
+                    [position_error, float(joint_regularization_weight) * (rest_q - q)]
+                )
+            else:
+                weighted_jacobian = jacobian
+                weighted_error = position_error
+            dq = self.damped_pseudoinverse(weighted_jacobian, float(damping)) @ weighted_error
+            largest_step = float(np.max(np.abs(dq)))
+            if largest_step > max_step:
+                dq *= float(max_step) / largest_step
+            q += dq
+            for idx, (lower, upper) in enumerate(self.limits):
+                if math.isfinite(lower) or math.isfinite(upper):
+                    q[idx] = np.clip(q[idx], lower, upper)
+        transform, _, _ = self.fk(q)
+        error_norm = float(np.linalg.norm(target - transform[:3, 3]))
+        metrics = {
+            "rgbd_dls_position_error_m": error_norm,
+            "rgbd_dls_iterations": iteration_count,
+            "rgbd_dls_converged_raw": False,
+            "rgbd_dls_damping": float(damping),
+            "rgbd_dls_joint_regularization_weight": float(joint_regularization_weight),
+        }
+        return q, False, error_norm, metrics
+
     def solve_pose(
         self,
         target,
@@ -2130,6 +2190,7 @@ def build_trajectory(chain, seed, seconds, fps, reconstructed_trajectory=None, c
                     "ocra_baseline",
                     "sew_mimic_geometric",
                     "sew_functional_hybrid",
+                    "rgbd_dls_baseline",
                 ) and arm.get("right_elbow_world") is not None:
                     wrist_base = observed_target
                     elbow_base = global_workspace_transform_base(world_to_robot_base(arm["right_elbow_world"]))
@@ -2188,7 +2249,42 @@ def build_trajectory(chain, seed, seconds, fps, reconstructed_trajectory=None, c
         q_before_ik = q.copy()
         joint_delta_limited = False
         if use_pose_ik:
-            if orientation_mode == "ocra_baseline" and shoulder_base is not None and elbow_base is not None:
+            if orientation_mode == "rgbd_dls_baseline":
+                dls_config = RETARGET_RUNTIME_CONFIG.get("rgbd_dls", {})
+                q_solved, converged, error, dls_metrics = chain.solve_rgbd_dls_position(
+                    target,
+                    q,
+                    iterations=int(dls_config.get("max_iterations", ik_config.get("max_iterations", 100))),
+                    damping=float(dls_config.get("damping", 0.045)),
+                    tolerance=float(dls_config.get("position_tolerance", ik_config.get("position_tolerance", 0.001))),
+                    max_step=float(dls_config.get("max_step", 0.08)),
+                    joint_regularization_weight=float(dls_config.get("joint_regularization_weight", 0.0)),
+                )
+                ema_alpha = dls_config.get("joint_ema_alpha")
+                if ema_alpha is not None and frame > 0:
+                    ema_alpha = float(ema_alpha)
+                    raw_error = float(error)
+                    raw_converged = bool(converged)
+                    q = ema_alpha * q_solved + (1.0 - ema_alpha) * q_before_ik
+                    transform_after_ema = chain.fk(q)[0]
+                    error = float(np.linalg.norm(np.asarray(target, dtype=float) - transform_after_ema[:3, 3]))
+                    converged = error < float(
+                        dls_config.get("position_tolerance", ik_config.get("position_tolerance", 0.001))
+                    )
+                    dls_metrics["rgbd_dls_raw_position_error_m"] = raw_error
+                    dls_metrics["rgbd_dls_raw_converged"] = raw_converged
+                    dls_metrics["rgbd_dls_joint_ema_alpha"] = ema_alpha
+                    dls_metrics["rgbd_dls_position_error_m"] = error
+                else:
+                    q = q_solved
+                    dls_metrics["rgbd_dls_joint_ema_alpha"] = 1.0
+                dls_metrics["rgbd_dls_target_source"] = "rgbd_deprojected_hand_target"
+                if wrist_base is not None and elbow_base is not None and shoulder_base is not None:
+                    functional_metrics = compute_functional_metrics(chain, q, wrist_base, elbow_base, shoulder_base)
+                    functional_metrics.update(dls_metrics)
+                orientation_error = None
+                elbow_error = None
+            elif orientation_mode == "ocra_baseline" and shoulder_base is not None and elbow_base is not None:
                 ocra_config = RETARGET_RUNTIME_CONFIG.get("ocra", {})
                 q, converged, error, orientation_error, elbow_error, functional_metrics = chain.solve_ocra_baseline(
                     target,
@@ -2545,7 +2641,7 @@ def build_trajectory(chain, seed, seconds, fps, reconstructed_trajectory=None, c
             solver_metric_overrides = {
                 key: value
                 for key, value in (functional_metrics or {}).items()
-                if key.startswith(("ocra_", "sew_", "hybrid_"))
+                if key.startswith(("ocra_", "sew_", "hybrid_", "rgbd_"))
             }
             functional_metrics = compute_functional_metrics(chain, q, wrist_base, elbow_base, shoulder_base)
             functional_metrics.update(solver_metric_overrides)
@@ -3061,6 +3157,7 @@ def main():
                 "ocra_baseline",
                 "sew_mimic_geometric",
                 "sew_functional_hybrid",
+                "rgbd_dls_baseline",
             ) and arm.get("right_elbow_world") is not None:
                 wrist_base = target
                 elbow_base = global_workspace_transform_base(world_to_robot_base(arm["right_elbow_world"]))
@@ -3086,6 +3183,24 @@ def main():
                 q, converged, error = chain.solve_position(target, current_q)
                 orientation_error = None
                 elbow_error = None
+            elif orientation_mode == "rgbd_dls_baseline":
+                dls_config = RETARGET_RUNTIME_CONFIG.get("rgbd_dls", {})
+                q, converged, error, dls_metrics = chain.solve_rgbd_dls_position(
+                    target,
+                    current_q,
+                    iterations=int(dls_config.get("max_iterations", ik_config.get("max_iterations", 100))),
+                    damping=float(dls_config.get("damping", 0.045)),
+                    tolerance=float(dls_config.get("position_tolerance", ik_config.get("position_tolerance", 0.001))),
+                    max_step=float(dls_config.get("max_step", 0.08)),
+                    joint_regularization_weight=float(dls_config.get("joint_regularization_weight", 0.0)),
+                )
+                dls_metrics["rgbd_dls_joint_ema_alpha"] = 1.0
+                dls_metrics["rgbd_dls_target_source"] = "rgbd_deprojected_hand_target"
+                orientation_error = None
+                elbow_error = None
+                if wrist_base is not None and elbow_base is not None and shoulder_base is not None:
+                    functional_metrics = compute_functional_metrics(chain, q, wrist_base, elbow_base, shoulder_base)
+                    functional_metrics.update(dls_metrics)
             elif orientation_mode == "sew_functional_hybrid" and full_arm_elbow_target is not None:
                 sew_config = RETARGET_RUNTIME_CONFIG.get("sew_mimic", {})
                 hybrid_config = RETARGET_RUNTIME_CONFIG.get("hybrid", {})
@@ -3335,10 +3450,16 @@ def main():
                     )
                 if "hybrid_seed_to_final_joint_delta_rad" in functional_metrics:
                     sew_text += f" hybrid_dq={functional_metrics['hybrid_seed_to_final_joint_delta_rad']:.3f}"
+                dls_text = ""
+                if "rgbd_dls_position_error_m" in functional_metrics:
+                    dls_text = (
+                        f" rgbd_dls={functional_metrics['rgbd_dls_position_error_m']:.3f}"
+                        f" iter={int(functional_metrics.get('rgbd_dls_iterations', 0))}"
+                    )
                 functional_text = (
                     f" forearm_deg={forearm_deg} upper_deg={upper_deg}"
                     f" anti={anti_penalty:.3f} align={anti_alignment:.3f} tool={tool_alignment:.3f}"
-                    f"{ocra_text}{sew_text}"
+                    f"{ocra_text}{sew_text}{dls_text}"
                 )
             print(
                 f"prepose phase={loaded_trajectory_phase_prefix()}-{observed_phase} "
@@ -3436,6 +3557,22 @@ def main():
                     f"seed_to_final_joint_delta_mean_rad={mean_hybrid_delta:.3f} "
                     f"seed_to_final_joint_delta_max_rad={max_hybrid_delta:.3f}"
                 )
+            rgbd_items = [item for item in functional_items if "rgbd_dls_position_error_m" in item]
+            if rgbd_items:
+                mean_dls_error = sum(float(item["rgbd_dls_position_error_m"]) for item in rgbd_items) / len(rgbd_items)
+                max_dls_error = max(float(item["rgbd_dls_position_error_m"]) for item in rgbd_items)
+                mean_dls_iterations = sum(float(item["rgbd_dls_iterations"]) for item in rgbd_items) / len(rgbd_items)
+                mean_raw_error = sum(
+                    float(item.get("rgbd_dls_raw_position_error_m", item["rgbd_dls_position_error_m"]))
+                    for item in rgbd_items
+                ) / len(rgbd_items)
+                ema_alpha = float(rgbd_items[-1].get("rgbd_dls_joint_ema_alpha", 1.0))
+                print(
+                    "rgbd_dls_baseline "
+                    f"position_mean_m={mean_dls_error:.4f} position_max_m={max_dls_error:.4f} "
+                    f"raw_position_mean_m={mean_raw_error:.4f} iterations_mean={mean_dls_iterations:.1f} "
+                    f"joint_ema_alpha={ema_alpha:.2f}"
+                )
         for item in diagnostics[:: max(1, int(args.fps))]:
             orientation_text = ""
             if item["orientation_error"] is not None:
@@ -3465,10 +3602,16 @@ def main():
                     )
                 if "hybrid_seed_to_final_joint_delta_rad" in functional:
                     sew_text += f" hybrid_dq={functional['hybrid_seed_to_final_joint_delta_rad']:.3f}"
+                dls_text = ""
+                if "rgbd_dls_position_error_m" in functional:
+                    dls_text = (
+                        f" rgbd_dls={functional['rgbd_dls_position_error_m']:.3f}"
+                        f" iter={int(functional.get('rgbd_dls_iterations', 0))}"
+                    )
                 functional_text = (
                     f" forearm_deg={forearm_deg} upper_deg={upper_deg}"
                     f" anti={anti_penalty:.3f} align={anti_alignment:.3f} tool={tool_alignment:.3f}"
-                    f"{ocra_text}{sew_text}"
+                    f"{ocra_text}{sew_text}{dls_text}"
                 )
             print(
                 f"{item['time']:>5.2f}s {item['phase']:<19} "

@@ -28,6 +28,39 @@ http://localhost:6080/vnc.html?autoconnect=1&resize=scale
 The plain `vnc.html` page stops on noVNC's connection screen until you click
 `Connect`.
 
+## Repository Contents and External Assets
+
+This repository includes enough assets to launch the Gazebo xArm7 scene and run
+the retargeting code path:
+
+- ROS 2 Jazzy / Gazebo Harmonic Docker environment.
+- xArm7 ROS 2 packages, launch files, URDF/xacro, MoveIt2 config, and Gazebo
+  worlds.
+- The table, red cup target, tripod D455-style camera, and static Gazebo
+  SMPL-X operator visual.
+- The Gazebo SMPL-X visual mesh and texture files under
+  `xarm_ros2/xarm_gazebo/models/smplx_operator/meshes/`.
+- Retargeting scripts, calibration configs, OCRA-style baseline config, and
+  documentation.
+
+The following files are intentionally **not** tracked in git. Users who need
+the full HMR / SMPLify-X / mesh-fitting pipeline must download or generate
+them locally:
+
+| Asset | Required for | Where to get it | Suggested local path |
+|---|---|---|---|
+| SMPL-X body model weights, e.g. `SMPLX_NEUTRAL.npz` from `models_smplx_v1_1.zip` | Running true SMPL-X model fitting or regenerating posed SMPL-X meshes | Register and download from the official SMPL-X website after accepting its license: <https://smpl-x.is.tue.mpg.de> | `external/smplx/models/smplx/SMPLX_NEUTRAL.npz` or any path passed as `--model-dir` |
+| SMPL-X UV map / texture zip, e.g. `smplx_uv_2023.zip` | Regenerating the Gazebo OBJ/texture assets | Official SMPL-X downloads section | `external/smplx/smplx_uv_2023.zip` |
+| VPoser v1.0, e.g. `vposer_v1_0.zip` | SMPLify-X-style pose prior during fitting | Official SMPL-X / SMPLify-X downloads section | `external/smplx/vposer_v1_0/` |
+| SMPL-X MANO / FLAME correspondences, e.g. `smplx_mano_flame_correspondences.zip` | Hand/face correspondence utilities and full expressive-body fitting experiments | Official SMPL-X downloads section | `external/smplx/correspondences/` |
+| Human video, RGB-D rosbag, or HMR output trajectory JSON | Reproducing a specific human-to-xArm retargeting run | Record your own data or convert an external HMR / SMPLify-X output using `docs/hmr_trajectory_contract.md` | `recordings/<run>/` |
+| Generated videos, images, rosbags, and local experiment outputs | Demo artifacts and benchmark plots | Generate locally with the scripts in `docker/` | `recordings/` |
+| Research paper PDFs | Literature review and paper-by-paper comparison | Download from each publisher / arXiv / project page. Local notes are kept in `research_papers/.../index.md` and `replicable_methods.md` | `research_papers/.../pdfs/` |
+
+The static Gazebo SMPL-X OBJ included in this repository is a visual asset for
+the simulator. It is **not** a substitute for the official SMPL-X parametric
+model weights used by SMPL-X / SMPLify-X fitting code.
+
 ## Useful Operations
 
 ```bash
@@ -53,14 +86,16 @@ MCAP ROS bag containing the RGB image, depth image, camera info, and point cloud
 topics.
 
 SMPL-X mesh support is scaffolded under
-`xarm_ros2/xarm_gazebo/models/smplx_operator/`. The official SMPL-X model files
-must be downloaded separately after accepting the SMPL-X license. Once they are
-available locally, export a Gazebo OBJ visual with:
+`xarm_ros2/xarm_gazebo/models/smplx_operator/`. A static Gazebo OBJ visual is
+tracked in git, so the simulator can show the SMPL-X operator without additional
+downloads. If you want to regenerate the OBJ from official SMPL-X model weights,
+download the SMPL-X assets separately after accepting the SMPL-X license, then
+run:
 
 ```bash
 python3 docker/export-smplx-operator.py \
-  --model-dir /path/to/SMPLX_MODEL_DIR \
-  --uv-template /Users/ryanm3/Documents/Codex/2026-05-06/smplx/smplx_uv_2023.zip \
+  --model-dir external/smplx/models \
+  --uv-template external/smplx/smplx_uv_2023.zip \
   --out xarm_ros2/xarm_gazebo/models/smplx_operator/meshes/smplx_operator.obj
 ```
 
@@ -68,7 +103,7 @@ If you already have an OBJ, MTL, texture set, or a zip such as
 `smplx_uv_2023.zip`, install it into the Gazebo model with:
 
 ```bash
-xarm7-gazebo-dev install-smplx-operator /Users/ryanm3/Documents/Codex/2026-05-06/smplx/smplx_uv_2023.zip
+xarm7-gazebo-dev install-smplx-operator external/smplx/smplx_uv_2023.zip
 ```
 
 Local SMPL-X support assets are staged under

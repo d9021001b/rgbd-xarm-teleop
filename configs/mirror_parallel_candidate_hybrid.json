@@ -1,0 +1,38 @@
+{
+  "schema": "mirror_parallel_candidate/v1",
+  "description": "MIRROR-style CPU baseline for xArm7 teleoperation: evaluate a deterministic grid of task-space continuation candidates per frame, certify progress against the final target, and select the largest accepted alpha. This is a CPU reproduction of the MIRROR idea, not the paper's GPU batched QP implementation.",
+  "mirror": {
+    "paper_reference": "MIRROR: Visual Motion Imitation via Real-time Retargeting and TeleOperation",
+    "alphas": [
+      0.25,
+      0.4,
+      0.55,
+      0.7,
+      0.85,
+      1.0
+    ],
+    "parallel_workers": 6,
+    "candidate_iterations": 10,
+    "primary_damping": 0.045,
+    "secondary_damping": 0.075,
+    "position_tolerance": 0.014,
+    "forearm_tolerance_deg": 70.0,
+    "upper_arm_tolerance_deg": 85.0,
+    "forearm_weight": 0.08,
+    "upper_arm_weight": 0.04,
+    "included_angle_weight": 0.12,
+    "secondary_step_scale": 0.45,
+    "max_step": 0.085,
+    "finite_difference_step": 0.0001,
+    "secondary_position_guard": 0.045,
+    "lyapunov_eta": 0.002,
+    "position_score_weight": 2.0,
+    "forearm_score_weight": 1.0,
+    "upper_arm_score_weight": 0.8,
+    "included_angle_score_weight": 0.8,
+    "joint_update_score_weight": 0.04,
+    "anti_self_score_weight": 0.25,
+    "min_tcp_z_base": 0.09,
+    "min_joint_margin_rad": 0.0
+  }
+}

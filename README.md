@@ -41,8 +41,8 @@ the retargeting code path:
 - The Gazebo SMPL-X visual mesh and texture files under
   `xarm_ros2/xarm_gazebo/models/smplx_operator/meshes/`.
 - Retargeting scripts, calibration configs, OCRA-style, SEW-Mimic-style,
-  RGB-D DLS, SEW-functional hybrid baseline configs, TelePreview preview-gate
-  tooling, and documentation.
+  RGB-D DLS, MIRROR-style parallel candidate IK, SEW-functional hybrid
+  baseline configs, TelePreview preview-gate tooling, and documentation.
 
 The following files are intentionally **not** tracked in git. Users who need
 the full HMR / SMPLify-X / mesh-fitting pipeline must download or generate
@@ -159,6 +159,13 @@ right-arm matching, then returns `APPROVE`, `APPROVE_WITH_WARNINGS`, or
 `configs/telepreview_gate_hybrid.json`. `docker/telepreview-auto-gate-retime.py`
 turns `APPROVE_WITH_WARNINGS` into an automatic prepose + retiming pass, then
 runs the gate again before execution.
+
+MIRROR-style parallel candidate IK is implemented as a CPU-reproducible
+baseline in `docker/retarget-mirror-parallel-candidate.py`. It evaluates an
+alpha grid of candidate IK targets per frame, certifies score progress and
+safety, then selects the largest accepted candidate. See
+`docs/mirror_parallel_candidate_zh.md` and
+`configs/mirror_parallel_candidate_hybrid.json`.
 
 ## Notes
 

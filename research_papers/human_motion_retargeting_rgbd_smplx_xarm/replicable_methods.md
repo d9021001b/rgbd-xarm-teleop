@@ -78,7 +78,7 @@ RGB-D / SMPL-X reconstructed human motion
 3. SEW + functional hybrid：已完成第一版 SEW seed + null-space correction，見 `docs/sew_functional_hybrid_zh.md` 與 `configs/xarm7_sew_functional_hybrid_no_moveit.json`。
 4. RGB-D DLS baseline：已完成第一版 hand/TCP-only DLS baseline，見 `docs/rgbd_dls_baseline_zh.md` 與 `configs/xarm7_rgbd_dls_baseline_no_moveit.json`。
 5. TelePreview mode：已完成 Gazebo/FK preview gate 與 `APPROVE_WITH_WARNINGS -> prepose + retiming -> APPROVE` 自動流程，見 `docs/telepreview_preview_gate_zh.md`、`configs/telepreview_gate_hybrid.json`、`docker/telepreview-preview-gate.py`、`docker/telepreview-auto-gate-retime.py`。
-6. MIRROR-style parallel candidate IK：作為高階即時化改造。
+6. MIRROR-style parallel candidate IK：已完成第一版 CPU parallel-candidate baseline，見 `docs/mirror_parallel_candidate_zh.md`、`configs/mirror_parallel_candidate_hybrid.json`、`docker/retarget-mirror-parallel-candidate.py`。
 
 ## 已完成 baseline 摘要
 
@@ -88,8 +88,17 @@ RGB-D / SMPL-X reconstructed human motion
 | SEW-Mimic-style | geometric elbow-swivel + TCP | 9.06 s | 0.10 mm / 4.14 mm | 19.89 deg | 83.39 deg | 49.33 deg |
 | SEW + functional hybrid | SEW seed + TCP-hard null-space correction | 14.72 s | 1.54 mm / 22.84 mm | 4.42 deg | 25.14 deg | 41.53 deg |
 | RGB-D DLS baseline | RGB-D hand target + DLS TCP-only IK + EMA | 6.07 s | 8.35 mm / 48.70 mm | 17.33 deg | 56.30 deg | 57.63 deg |
+| MIRROR-style parallel candidate | alpha-grid candidate IK + progress gate | 5.18 s | 5.00 mm / 13.99 mm | 15.20 deg | 33.42 deg | 51.45 deg |
 
-目前結論：RGB-D DLS 是最快的直接 hand-shadowing baseline，但因為只追 TCP，不會自然保證上臂/前臂構型像人；SEW + functional hybrid 在速度仍可接受的情況下，對 included-angle 與 forearm functional matching 最穩。
+目前結論：MIRROR-style parallel candidate 是目前最快且安全 gate 友善的 branch-recovery seed；RGB-D DLS 是直接 hand-shadowing baseline；SEW + functional hybrid 在速度仍可接受的情況下，對 included-angle 與 forearm functional matching 最穩。下一步應把 MIRROR 的快速候選選解接到 lightweight functional/null-space correction，而不是單獨取代 hybrid。
+
+## 已完成 MIRROR-style 摘要
+
+| 方法 | Decision | Hard gates | Soft warnings |
+|---|---|---|---|
+| MIRROR-style parallel candidate | APPROVE_WITH_WARNINGS | TCP max error、table clearance、URDF joint limits、joint-step p95 全通過 | included-angle mean 與 upper-arm mean-max 高於目前 quality threshold |
+
+MIRROR-style 的重點是借用 paper 的 task-space continuation 與 progress certificate：同一幀同時評估多個 alpha candidate，安全且 score 有進展時選最大 alpha。它改善 runtime 與 TCP max error，但因為目前不是完整 GPU QP/CBF，也沒有把 functional posture fidelity 放到最強 priority，因此姿態一致性仍不如 SEW + functional hybrid。
 
 ## 已完成 preview gate 摘要
 

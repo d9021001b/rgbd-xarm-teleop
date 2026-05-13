@@ -1,0 +1,555 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_PATH="${BASH_SOURCE[0]}"
+while [[ -L "$SCRIPT_PATH" ]]; do
+  SCRIPT_DIR="$(cd -P "$(dirname "$SCRIPT_PATH")" && pwd)"
+  SCRIPT_PATH="$(readlink "$SCRIPT_PATH")"
+  [[ "$SCRIPT_PATH" != /* ]] && SCRIPT_PATH="${SCRIPT_DIR}/${SCRIPT_PATH}"
+done
+ROOT_DIR="$(cd -P "$(dirname "$SCRIPT_PATH")" && pwd)"
+IMAGE_NAME="${XARM7_IMAGE_NAME:-local/ros2-xarm7-gazebo:jazzy}"
+CONTAINER_NAME="${XARM7_CONTAINER_NAME:-ros2-xarm7-gazebo}"
+NOVNC_PORT="${XARM7_NOVNC_PORT:-6080}"
+RECORDINGS_DIR="${XARM7_RECORDINGS_DIR:-${ROOT_DIR}/recordings}"
+SMPLX_SOURCE_DIR="${SMPLX_SOURCE_DIR:-/Users/ryanm3/Documents/Codex/2026-05-06/smplx}"
+
+ensure_ros2_context() {
+  if ! colima status -p ros2 >/dev/null 2>&1; then
+    colima start -p ros2 --cpu 8 --memory 16 --disk 80 --vm-type=vz --dns 1.1.1.1 --dns 8.8.8.8
+  fi
+  docker context use colima-ros2 >/dev/null
+}
+
+container_exists() {
+  docker ps -a --format '{{.Names}}' | grep -qx "$CONTAINER_NAME"
+}
+
+container_running() {
+  docker ps --format '{{.Names}}' | grep -qx "$CONTAINER_NAME"
+}
+
+build_image() {
+  ensure_ros2_context
+  docker build -t "$IMAGE_NAME" "$ROOT_DIR"
+}
+
+start_container() {
+  ensure_ros2_context
+  if container_running; then
+    echo "$CONTAINER_NAME is already running"
+    return 0
+  fi
+  if container_exists; then
+    docker rm "$CONTAINER_NAME" >/dev/null
+  fi
+  docker run -d \
+    --name "$CONTAINER_NAME" \
+    --shm-size=2g \
+    -p "${NOVNC_PORT}:6080" \
+    "$IMAGE_NAME" \
+    tail -f /dev/null >/dev/null
+  echo "noVNC: http://localhost:${NOVNC_PORT}/vnc.html?autoconnect=1&resize=scale"
+}
+
+launch_sim() {
+  start_container
+  local tty_args=()
+  if [[ -t 0 && -t 1 ]]; then
+    tty_args=(-it)
+  fi
+  docker exec "${tty_args[@]}" "$CONTAINER_NAME" launch-xarm7-gazebo
+}
+
+view_d455() {
+  start_container
+  docker exec -d "$CONTAINER_NAME" bash -lc '
+    set +u
+    source /opt/ros/jazzy/setup.bash
+    source /root/ws/install/setup.bash
+    set -u
+    export ROS_DOMAIN_ID=42
+    rviz2 -f world >/tmp/d455-rviz.log 2>&1
+  '
+  echo "RViz log: docker exec ${CONTAINER_NAME} tail -f /tmp/d455-rviz.log"
+  echo "noVNC: http://localhost:${NOVNC_PORT}/vnc.html?autoconnect=1&resize=scale"
+  echo "Add displays in RViz:"
+  echo "  Image: /tripod_d455/depth/image"
+  echo "  Image: /tripod_d455/depth/depth_image"
+  echo "  PointCloud2: /tripod_d455/depth/points"
+}
+
+record_d455() {
+  start_container
+  local seconds="${1:-10}"
+  if ! [[ "$seconds" =~ ^[0-9]+$ ]]; then
+    echo "record-d455 expects whole seconds, for example: xarm7-gazebo-dev record-d455 10" >&2
+    return 2
+  fi
+  local stamp
+  stamp="$(date +%Y%m%d_%H%M%S)"
+  local local_dir="${RECORDINGS_DIR}/d455_${stamp}"
+  local container_dir="/tmp/d455_${stamp}"
+  mkdir -p "$local_dir"
+  docker cp "${ROOT_DIR}/docker/record-d455-10s.py" "${CONTAINER_NAME}:/tmp/record-d455-10s.py"
+  docker exec "$CONTAINER_NAME" bash -lc "
+    set +u
+    source /opt/ros/jazzy/setup.bash
+    source /root/ws/install/setup.bash
+    set -u
+    export ROS_DOMAIN_ID=42
+    rm -rf '${container_dir}'
+    mkdir -p '${container_dir}'
+    timeout '$((seconds + 3))' ros2 bag record \
+      -s mcap \
+      --storage-preset-profile zstd_fast \
+      -o '${container_dir}/d455_rosbag' \
+      --topics \
+      /tripod_d455/depth/image \
+      /tripod_d455/depth/depth_image \
+      /tripod_d455/depth/camera_info \
+      /tripod_d455/depth/points >/tmp/d455-rosbag.log 2>&1 &
+    bag_pid=\$!
+    python3 /tmp/record-d455-10s.py --seconds '${seconds}' --out-dir '${container_dir}'
+    wait \$bag_pid || true
+  "
+  docker cp "${CONTAINER_NAME}:${container_dir}/." "$local_dir/"
+  echo "Recording: ${local_dir}"
+}
+
+record_smplx_grasp() {
+  local seconds="${1:-10}"
+  if ! [[ "$seconds" =~ ^[0-9]+$ ]]; then
+    echo "record-smplx-grasp expects whole seconds, for example: xarm7-gazebo-dev record-smplx-grasp 10" >&2
+    return 2
+  fi
+  local stamp
+  stamp="$(date +%Y%m%d_%H%M%S)"
+  local local_dir="${RECORDINGS_DIR}/smplx_grasp_${stamp}"
+  (
+    cd "$ROOT_DIR"
+    source "${ROOT_DIR}/.venv-smplx/bin/activate"
+    python "${ROOT_DIR}/docker/render-smplx-grasp-animation.py" \
+      --model-dir "${SMPLX_SOURCE_DIR}/models" \
+      --hand-poses "${SMPLX_SOURCE_DIR}/blender_addon_data/smplx_blender_addon/data/smplx_handposes.npz" \
+      --out-dir "$local_dir" \
+      --seconds "$seconds" \
+      --fps 15
+  )
+  echo "Recording: ${local_dir}"
+}
+
+record_xarm_smplx_retarget() {
+  local seconds="${1:-12}"
+  local external_trajectory_json="${2:-}"
+  if ! [[ "$seconds" =~ ^[0-9]+$ ]]; then
+    echo "record-xarm-smplx expects whole seconds, for example: xarm7-gazebo-dev record-xarm-smplx 12 [trajectory-json]" >&2
+    return 2
+  fi
+  if [[ -n "$external_trajectory_json" && ! -f "$external_trajectory_json" ]]; then
+    echo "External trajectory JSON not found: $external_trajectory_json" >&2
+    return 2
+  fi
+  local retarget_config="${XARM7_RETARGET_CONFIG:-${ROOT_DIR}/configs/xarm7_smplx_retarget_calibration.json}"
+  start_container
+  local stamp
+  stamp="$(date +%Y%m%d_%H%M%S)"
+  local local_dir="${RECORDINGS_DIR}/xarm_smplx_retarget_${stamp}"
+  local container_dir="/tmp/xarm_smplx_retarget_${stamp}"
+  mkdir -p "$local_dir"
+  docker cp "${ROOT_DIR}/docker/record-d455-10s.py" "${CONTAINER_NAME}:/tmp/record-d455-10s.py"
+  docker cp "${ROOT_DIR}/docker/record-retarget-closeup.py" "${CONTAINER_NAME}:/tmp/record-retarget-closeup.py"
+  docker cp "${ROOT_DIR}/docker/reconstruct-smplx-from-d455.py" "${CONTAINER_NAME}:/tmp/reconstruct-smplx-from-d455.py"
+  docker cp "${ROOT_DIR}/docker/convert-hmr-to-d455-trajectory.py" "${CONTAINER_NAME}:/tmp/convert-hmr-to-d455-trajectory.py"
+  docker cp "${ROOT_DIR}/docker/animate-smplx-frame-sequence.py" "${CONTAINER_NAME}:/tmp/animate-smplx-frame-sequence.py"
+  docker cp "${ROOT_DIR}/docker/send-xarm-goal.py" "${CONTAINER_NAME}:/tmp/send-xarm-goal.py"
+  docker cp "${ROOT_DIR}/docker/attach-cup-to-tcp.py" "${CONTAINER_NAME}:/tmp/attach-cup-to-tcp.py"
+  docker cp "${ROOT_DIR}/docker/retarget-smplx-hand-to-xarm.py" "${CONTAINER_NAME}:/tmp/retarget-smplx-hand-to-xarm.py"
+  docker cp "${ROOT_DIR}/docker/record-xarm-smplx-retarget.sh" "${CONTAINER_NAME}:/tmp/record-xarm-smplx-retarget.sh"
+  docker cp "${ROOT_DIR}/docker/start-xarm7-move-group-only.sh" "${CONTAINER_NAME}:/tmp/start-xarm7-move-group-only.sh"
+  docker exec "$CONTAINER_NAME" chmod +x /tmp/record-xarm-smplx-retarget.sh /tmp/record-retarget-closeup.py /tmp/reconstruct-smplx-from-d455.py /tmp/convert-hmr-to-d455-trajectory.py /tmp/animate-smplx-frame-sequence.py /tmp/retarget-smplx-hand-to-xarm.py /tmp/send-xarm-goal.py /tmp/attach-cup-to-tcp.py /tmp/start-xarm7-move-group-only.sh
+  if [[ "${START_MOVEIT2:-0}" == "1" ]]; then
+    docker exec "$CONTAINER_NAME" /tmp/start-xarm7-move-group-only.sh
+  fi
+  local exec_env=()
+  exec_env+=(-e RETARGET_EXECUTION_MODE="${RETARGET_EXECUTION_MODE:-segmented}")
+  exec_env+=(-e ACTION_SECONDS="${ACTION_SECONDS:-$seconds}")
+  if [[ -f "$retarget_config" ]]; then
+    docker cp "$retarget_config" "${CONTAINER_NAME}:/tmp/xarm7-smplx-retarget-calibration.json"
+    exec_env+=(-e RETARGET_CONFIG=/tmp/xarm7-smplx-retarget-calibration.json)
+  fi
+  if [[ -n "$external_trajectory_json" ]]; then
+    docker cp "$external_trajectory_json" "${CONTAINER_NAME}:/tmp/external-smplx-d455-trajectory.json"
+    exec_env+=(-e EXTERNAL_SMPLX_D455_TRAJECTORY_JSON=/tmp/external-smplx-d455-trajectory.json)
+  fi
+  docker exec "${exec_env[@]}" "$CONTAINER_NAME" /tmp/record-xarm-smplx-retarget.sh "$container_dir" "$seconds"
+  docker cp "${CONTAINER_NAME}:${container_dir}/." "$local_dir/"
+  echo "Recording: ${local_dir}"
+}
+
+extract_taichi_trajectory() {
+  local video_path="${1:-/Users/ryanm3/Documents/Codex/2026-05-06/taichi.mp4}"
+  local start_seconds="${2:-78}"
+  local seconds="${3:-18}"
+  local fps="${4:-10}"
+  if [[ ! -f "$video_path" ]]; then
+    echo "Taichi source video not found: $video_path" >&2
+    return 2
+  fi
+  local stamp
+  stamp="$(date +%Y%m%d_%H%M%S)"
+  local local_dir="${RECORDINGS_DIR}/taichi_right_hand_${stamp}"
+  mkdir -p "$local_dir"
+  start_container
+  docker cp "${ROOT_DIR}/docker/extract-taichi-right-hand-trajectory.py" "${CONTAINER_NAME}:/tmp/extract-taichi-right-hand-trajectory.py"
+  docker cp "${ROOT_DIR}/configs/xarm7_taichi_retarget_moveit.json" "${CONTAINER_NAME}:/tmp/xarm7-taichi-retarget-moveit.json"
+  docker cp "$video_path" "${CONTAINER_NAME}:/tmp/taichi-source.mp4"
+  docker exec "$CONTAINER_NAME" chmod +x /tmp/extract-taichi-right-hand-trajectory.py
+  docker exec "$CONTAINER_NAME" rm -f /tmp/taichi-right-hand-trajectory.json /tmp/taichi-right-hand-overlay.mp4
+  docker exec "$CONTAINER_NAME" bash -lc "
+    /tmp/extract-taichi-right-hand-trajectory.py \
+      --video /tmp/taichi-source.mp4 \
+      --retarget-config /tmp/xarm7-taichi-retarget-moveit.json \
+      --start '$start_seconds' \
+      --seconds '$seconds' \
+      --fps '$fps' \
+      --out /tmp/taichi-right-hand-trajectory.json \
+      --overlay /tmp/taichi-right-hand-overlay.mp4
+  "
+  docker cp "${CONTAINER_NAME}:/tmp/taichi-right-hand-trajectory.json" "${local_dir}/taichi_right_hand_trajectory.json"
+  docker cp "${CONTAINER_NAME}:/tmp/taichi-right-hand-overlay.mp4" "${local_dir}/taichi_right_hand_overlay.mp4" || true
+  echo "Taichi trajectory: ${local_dir}/taichi_right_hand_trajectory.json"
+}
+
+record_taichi_retarget() {
+  local video_path="${1:-/Users/ryanm3/Documents/Codex/2026-05-06/taichi.mp4}"
+  local start_seconds="${2:-78}"
+  local seconds="${3:-18}"
+  local fps="${4:-10}"
+  local trajectory_dir
+  trajectory_dir="$(extract_taichi_trajectory "$video_path" "$start_seconds" "$seconds" "$fps" | tee /dev/stderr | awk -F': ' '/Taichi trajectory:/ {print $2}' | xargs dirname)"
+  if [[ -z "$trajectory_dir" || ! -f "${trajectory_dir}/taichi_right_hand_trajectory.json" ]]; then
+    echo "Failed to build taichi right-hand trajectory." >&2
+    return 1
+  fi
+  START_MOVEIT2=1 \
+  RETARGET_EXECUTION_MODE=raw_dense \
+  ACTION_SECONDS="$seconds" \
+  XARM7_RETARGET_CONFIG="${ROOT_DIR}/configs/xarm7_taichi_retarget_moveit.json" \
+    record_xarm_smplx_retarget "$seconds" "${trajectory_dir}/taichi_right_hand_trajectory.json"
+}
+
+convert_hmr_trajectory() {
+  local input_path="${1:-}"
+  local output_path="${2:-}"
+  local fps="${3:-15}"
+  if [[ -z "$input_path" || -z "$output_path" ]]; then
+    echo "convert-hmr expects input and output paths, for example:" >&2
+    echo "  xarm7-gazebo-dev convert-hmr hmr_output.npz smplx_d455_reconstructed_right_hand.json 15" >&2
+    return 2
+  fi
+  if [[ ! -f "$input_path" ]]; then
+    echo "HMR input not found: $input_path" >&2
+    return 2
+  fi
+  start_container
+  local input_ext=".${input_path##*.}"
+  docker cp "${ROOT_DIR}/docker/convert-hmr-to-d455-trajectory.py" "${CONTAINER_NAME}:/tmp/convert-hmr-to-d455-trajectory.py"
+  docker cp "$input_path" "${CONTAINER_NAME}:/tmp/hmr-input${input_ext}"
+  docker exec "$CONTAINER_NAME" chmod +x /tmp/convert-hmr-to-d455-trajectory.py
+  docker exec "$CONTAINER_NAME" bash -lc "/tmp/convert-hmr-to-d455-trajectory.py --input '/tmp/hmr-input${input_ext}' --out /tmp/smplx_d455_reconstructed_right_hand.json --fps '$fps'"
+  mkdir -p "$(dirname "$output_path")"
+  docker cp "${CONTAINER_NAME}:/tmp/smplx_d455_reconstructed_right_hand.json" "$output_path"
+  echo "Converted trajectory: ${output_path}"
+}
+
+fit_smplx_rgbd() {
+  local recording_dir="${1:-}"
+  local fps="${2:-3}"
+  if [[ -z "$recording_dir" ]]; then
+    echo "fit-smplx-rgbd expects a recording directory, for example:" >&2
+    echo "  xarm7-gazebo-dev fit-smplx-rgbd recordings/xarm_smplx_retarget_YYYYMMDD_HHMMSS 3" >&2
+    return 2
+  fi
+  if [[ ! -d "${recording_dir}/d455_rosbag" ]]; then
+    echo "Recording directory must contain d455_rosbag: ${recording_dir}" >&2
+    return 2
+  fi
+  start_container
+  docker exec "$CONTAINER_NAME" rm -rf /tmp/smplx_rgbd_fit_bag /tmp/d455_rgbd_samples.npz
+  docker cp "${ROOT_DIR}/docker/extract-d455-rgbd-samples.py" "${CONTAINER_NAME}:/tmp/extract-d455-rgbd-samples.py"
+  docker cp "${recording_dir}/d455_rosbag" "${CONTAINER_NAME}:/tmp/smplx_rgbd_fit_bag"
+  docker exec "$CONTAINER_NAME" bash -lc "
+    set +u
+    source /opt/ros/jazzy/setup.bash
+    source /root/ws/install/setup.bash
+    set -u
+    chmod +x /tmp/extract-d455-rgbd-samples.py
+    /tmp/extract-d455-rgbd-samples.py --bag /tmp/smplx_rgbd_fit_bag --out /tmp/d455_rgbd_samples.npz --fps '${fps}' --max-seconds 10
+  "
+  docker cp "${CONTAINER_NAME}:/tmp/d455_rgbd_samples.npz" "${recording_dir}/d455_rgbd_samples.npz"
+  (
+    cd "$ROOT_DIR"
+    source "${ROOT_DIR}/.venv-smplx/bin/activate"
+    python "${ROOT_DIR}/docker/fit-smplx-from-rgbd.py" \
+      --rgbd-npz "${recording_dir}/d455_rgbd_samples.npz" \
+      --model-dir "${SMPLX_SOURCE_DIR}/models" \
+      --hand-poses "${SMPLX_SOURCE_DIR}/blender_addon_data/smplx_blender_addon/data/smplx_handposes.npz" \
+      --out "${recording_dir}/smplx_rgbd_pose_fit_right_hand.json" \
+      --max-frames 31 \
+      --steps 35 \
+      --fit-mode pose
+  )
+  echo "RGB-D SMPL-X pose fit trajectory: ${recording_dir}/smplx_rgbd_pose_fit_right_hand.json"
+}
+
+build_smplx_animation() {
+  local seconds="${1:-10}"
+  local fps="${2:-5}"
+  if ! [[ "$seconds" =~ ^[0-9]+$ && "$fps" =~ ^[0-9]+$ ]]; then
+    echo "build-smplx-animation expects whole seconds and fps, for example: xarm7-gazebo-dev build-smplx-animation 10 5" >&2
+    return 2
+  fi
+  (
+    cd "$ROOT_DIR"
+    source "${ROOT_DIR}/.venv-smplx/bin/activate"
+    python "${ROOT_DIR}/docker/export-smplx-animation-frames.py" \
+      --model-dir "${SMPLX_SOURCE_DIR}/models" \
+      --hand-poses "${SMPLX_SOURCE_DIR}/blender_addon_data/smplx_blender_addon/data/smplx_handposes.npz" \
+      --out-model-dir "${ROOT_DIR}/xarm_ros2/xarm_gazebo/models/smplx_operator_animation" \
+      --seconds "$seconds" \
+      --fps "$fps"
+  )
+  if container_running; then
+    docker cp \
+      "${ROOT_DIR}/xarm_ros2/xarm_gazebo/models/smplx_operator_animation" \
+      "${CONTAINER_NAME}:/root/ws/install/xarm_gazebo/share/xarm_gazebo/models/"
+    docker cp "${ROOT_DIR}/docker/animate-smplx-frame-sequence.py" "${CONTAINER_NAME}:/tmp/animate-smplx-frame-sequence.py"
+    docker exec "$CONTAINER_NAME" chmod +x /tmp/animate-smplx-frame-sequence.py
+    echo "Copied SMPL-X animation frames into the running container."
+  fi
+}
+
+record_smplx_animation_d455() {
+  local seconds="${1:-10}"
+  local fps="${2:-5}"
+  if ! [[ "$seconds" =~ ^[0-9]+$ && "$fps" =~ ^[0-9]+$ ]]; then
+    echo "record-smplx-animation-d455 expects whole seconds and fps, for example: xarm7-gazebo-dev record-smplx-animation-d455 10 5" >&2
+    return 2
+  fi
+  start_container
+  if [[ ! -f "${ROOT_DIR}/xarm_ros2/xarm_gazebo/models/smplx_operator_animation/animation_manifest.json" ]]; then
+    build_smplx_animation "$seconds" "$fps"
+  else
+    docker cp \
+      "${ROOT_DIR}/xarm_ros2/xarm_gazebo/models/smplx_operator_animation" \
+      "${CONTAINER_NAME}:/root/ws/install/xarm_gazebo/share/xarm_gazebo/models/"
+    docker cp "${ROOT_DIR}/docker/animate-smplx-frame-sequence.py" "${CONTAINER_NAME}:/tmp/animate-smplx-frame-sequence.py"
+    docker cp "${ROOT_DIR}/docker/record-d455-10s.py" "${CONTAINER_NAME}:/tmp/record-d455-10s.py"
+    docker exec "$CONTAINER_NAME" chmod +x /tmp/animate-smplx-frame-sequence.py /tmp/record-d455-10s.py
+  fi
+  local stamp
+  stamp="$(date +%Y%m%d_%H%M%S)"
+  local local_dir="${RECORDINGS_DIR}/smplx_anim_d455_${stamp}"
+  local container_dir="/tmp/smplx_anim_d455_${stamp}"
+  mkdir -p "$local_dir"
+  docker exec "$CONTAINER_NAME" bash -lc "
+    set +u
+    source /opt/ros/jazzy/setup.bash
+    source /root/ws/install/setup.bash
+    set -u
+    /tmp/animate-smplx-frame-sequence.py \
+      --manifest /root/ws/install/xarm_gazebo/share/xarm_gazebo/models/smplx_operator_animation/animation_manifest.json \
+      --seconds 1 \
+      --fps '$fps' \
+      --hide-static \
+      --prepare-only >/tmp/smplx-anim-prepare.log 2>&1
+  "
+  docker exec "$CONTAINER_NAME" bash -lc "
+    set +u
+    source /opt/ros/jazzy/setup.bash
+    source /root/ws/install/setup.bash
+    set -u
+    export ROS_DOMAIN_ID=42
+    rm -rf '${container_dir}'
+    mkdir -p '${container_dir}'
+    timeout '$((seconds + 3))' ros2 bag record \
+      -s mcap \
+      --storage-preset-profile zstd_fast \
+      -o '${container_dir}/d455_rosbag' \
+      --topics \
+      /tripod_d455/depth/image \
+      /tripod_d455/depth/depth_image \
+      /tripod_d455/depth/camera_info \
+      /tripod_d455/depth/points >/tmp/smplx-anim-rosbag.log 2>&1 &
+    bag_pid=\$!
+    python3 /tmp/record-d455-10s.py --seconds '${seconds}' --out-dir '${container_dir}' >/tmp/smplx-anim-d455.log 2>&1 &
+    rec_pid=\$!
+    sleep 0.3
+    /tmp/animate-smplx-frame-sequence.py \
+      --manifest /root/ws/install/xarm_gazebo/share/xarm_gazebo/models/smplx_operator_animation/animation_manifest.json \
+      --seconds '${seconds}' \
+      --fps '${fps}' \
+      --skip-hide-all \
+      --hide-static > '${container_dir}/smplx_animation.log' 2>&1
+    wait \$rec_pid || true
+    wait \$bag_pid || true
+    cp /tmp/smplx-anim-d455.log '${container_dir}/d455_video.log' || true
+    cp /tmp/smplx-anim-rosbag.log '${container_dir}/rosbag.log' || true
+    cp /tmp/smplx-anim-prepare.log '${container_dir}/prepare.log' || true
+  "
+  docker cp "${CONTAINER_NAME}:${container_dir}/." "$local_dir/"
+  echo "Recording: ${local_dir}"
+}
+
+install_smplx_operator_assets() {
+  local obj_path="${1:-}"
+  if [[ -z "$obj_path" ]]; then
+    echo "install-smplx-operator expects an OBJ or zip path, for example:" >&2
+    echo "  xarm7-gazebo-dev install-smplx-operator /Users/ryanm3/Documents/Codex/2026-05-06/smplx/smplx_uv_2023.zip" >&2
+    return 2
+  fi
+  python3 "${ROOT_DIR}/docker/install-smplx-operator-assets.py" \
+    "$obj_path" \
+    --model-dir "${ROOT_DIR}/xarm_ros2/xarm_gazebo/models/smplx_operator"
+  if container_running; then
+    docker cp \
+      "${ROOT_DIR}/xarm_ros2/xarm_gazebo/models/smplx_operator" \
+      "${CONTAINER_NAME}:/root/ws/install/xarm_gazebo/share/xarm_gazebo/models/"
+    echo "Copied smplx_operator assets into the running container."
+    echo "Restart Gazebo with: xarm7-gazebo-dev launch-bg"
+  fi
+}
+
+case "${1:-help}" in
+  build)
+    build_image
+    ;;
+  start)
+    start_container
+    ;;
+  launch)
+    launch_sim
+    ;;
+  launch-bg)
+    start_container
+    if docker exec "$CONTAINER_NAME" bash -lc 'pgrep -f "[l]aunch-xarm7-gazebo|[x]arm7_beside_table_gazebo|[g]z sim" >/dev/null'; then
+      echo "Gazebo is already running in ${CONTAINER_NAME}; not starting a duplicate."
+      echo "Launch log: docker exec ${CONTAINER_NAME} tail -f /tmp/xarm7-gazebo.log"
+      exit 0
+    fi
+    docker exec -d "$CONTAINER_NAME" bash -lc 'launch-xarm7-gazebo >/tmp/xarm7-gazebo.log 2>&1'
+    echo "Launch log: docker exec ${CONTAINER_NAME} tail -f /tmp/xarm7-gazebo.log"
+    ;;
+  view-d455)
+    view_d455
+    ;;
+  view-d435)
+    view_d455
+    ;;
+  record-d455)
+    record_d455 "${2:-10}"
+    ;;
+  record-smplx-grasp)
+    record_smplx_grasp "${2:-10}"
+    ;;
+  build-smplx-animation)
+    build_smplx_animation "${2:-10}" "${3:-5}"
+    ;;
+  record-smplx-animation-d455)
+    record_smplx_animation_d455 "${2:-10}" "${3:-5}"
+    ;;
+  record-xarm-smplx)
+    record_xarm_smplx_retarget "${2:-12}" "${3:-}"
+    ;;
+  extract-taichi)
+    extract_taichi_trajectory "${2:-/Users/ryanm3/Documents/Codex/2026-05-06/taichi.mp4}" "${3:-78}" "${4:-18}" "${5:-10}"
+    ;;
+  record-taichi-retarget)
+    record_taichi_retarget "${2:-/Users/ryanm3/Documents/Codex/2026-05-06/taichi.mp4}" "${3:-78}" "${4:-18}" "${5:-10}"
+    ;;
+  convert-hmr)
+    convert_hmr_trajectory "${2:-}" "${3:-}" "${4:-15}"
+    ;;
+  fit-smplx-rgbd)
+    fit_smplx_rgbd "${2:-}" "${3:-3}"
+    ;;
+  record-d435)
+    record_d455 "${2:-10}"
+    ;;
+  install-smplx-operator)
+    install_smplx_operator_assets "${2:-}"
+    ;;
+  shell)
+    start_container
+    docker exec -it "$CONTAINER_NAME" bash
+    ;;
+  status)
+    ensure_ros2_context
+    docker ps -a --filter "name=${CONTAINER_NAME}"
+    echo "noVNC: http://localhost:${NOVNC_PORT}/vnc.html?autoconnect=1&resize=scale"
+    ;;
+  logs)
+    ensure_ros2_context
+    docker logs -f "$CONTAINER_NAME"
+    ;;
+  sim-logs)
+    start_container
+    docker exec "$CONTAINER_NAME" tail -f /tmp/xarm7-gazebo.log
+    ;;
+  stop)
+    ensure_ros2_context
+    docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
+    ;;
+  context)
+    ensure_ros2_context
+    docker context show
+    colima list
+    ;;
+  help|*)
+    cat <<USAGE
+Usage: xarm7-gazebo-dev <command>
+
+Commands:
+  build    Build Ubuntu 24.04 + ROS 2 Jazzy + xArm7 Gazebo image
+  start    Start the noVNC desktop container
+  launch   Start container and launch xArm7 Gazebo simulator
+  launch-bg
+           Start xArm7 Gazebo simulator in the background
+  shell    Open a shell inside the container
+  status   Show container status and noVNC URL
+  logs     Follow container logs
+  sim-logs Follow xArm7 simulator launch logs
+  view-d455
+           Open RViz in the noVNC desktop for D455 image/depth/point cloud viewing
+  record-d455 [seconds]
+           Record D455 RGB/depth MP4 files and a ROS bag with PointCloud2
+  record-smplx-grasp [seconds]
+           Render a D455-viewpoint SMPL-X reach/grasp/lift animation MP4
+  build-smplx-animation [seconds] [fps]
+           Export SMPL-X cup-grasp OBJ frame sequence and copy it into the container
+  record-smplx-animation-d455 [seconds] [fps]
+           Animate the SMPL-X OBJ frame sequence in Gazebo and record D455 RGB-D
+  record-xarm-smplx [seconds] [trajectory-json]
+           Retarget a D455 reconstructed SMPL-X hand trajectory to xArm7 and record video
+  extract-taichi [video] [start-seconds] [seconds] [fps]
+           Track the right hand in taichi.mp4 middle section and write a retarget trajectory JSON
+  record-taichi-retarget [video] [start-seconds] [seconds] [fps]
+           Track taichi right-hand motion, start MoveIt2, retarget to xArm7, and record the result
+  convert-hmr <hmr-json-or-npz> <trajectory-json> [fps]
+           Convert RGB-D HMR / SMPLify-X joints into the retarget trajectory contract
+  fit-smplx-rgbd <recording-dir> [fps]
+           Fit SMPL-X mesh to recorded D455 RGB-D frames and write a retarget trajectory JSON
+  install-smplx-operator <obj-or-zip>
+           Install a local OBJ or zip plus adjacent MTL/UV textures into the SMPL-X Gazebo model
+  stop     Remove the running container
+  context  Switch Docker to the ros2 Colima context and show status
+
+Environment overrides:
+  XARM7_NOVNC_PORT=6080
+  XARM7_IMAGE_NAME=local/ros2-xarm7-gazebo:jazzy
+  XARM7_CONTAINER_NAME=ros2-xarm7-gazebo
+  XARM7_RECORDINGS_DIR=${ROOT_DIR}/recordings
+USAGE
+    ;;
+esac

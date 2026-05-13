@@ -1,0 +1,74 @@
+{
+  "schema": "xarm7_smplx_retarget_calibration.v1",
+  "description": "Retarget taichi.mp4 middle-section right-hand motion to xArm7 with MoveIt2 table collision scene and table-clearance safety.",
+  "frames": {
+    "world": "gazebo_default_world",
+    "robot_base": "link_base",
+    "target_tip": "link_tcp"
+  },
+  "robot_world": {
+    "position": [-0.2, -0.5, 1.021],
+    "yaw": 1.571
+  },
+  "source": {
+    "type": "single_view_taichi_video_right_hand",
+    "trajectory_json_schema": "samples[].right_hand_world in Gazebo world coordinates"
+  },
+  "cup_world": [0.34, -0.93, 1.065],
+  "task": {
+    "mode": "cup_base_relative",
+    "tcp_grasp_offset_world": [0.0, 0.0, 0.105],
+    "visual_grasp_offset_world": [0.0, 0.0, 0.0],
+    "waypoints_base_from_tcp_grasp": {
+      "ready": [-0.18, 0.17, 0.16],
+      "hover": [0.0, 0.0, 0.16],
+      "grasp": [0.0, 0.0, 0.10],
+      "lift": [0.0, 0.0, 0.30]
+    }
+  },
+  "orientation": {
+    "mode": "tcp_z_down",
+    "rotation_base": [
+      [1.0, 0.0, 0.0],
+      [0.0, -1.0, 0.0],
+      [0.0, 0.0, -1.0]
+    ]
+  },
+  "target_limits_base": {
+    "min": [-0.70, -0.67, 0.13],
+    "max": [0.10, 0.12, 0.56]
+  },
+  "ik": {
+    "controller_blend_in_seconds": 1.0,
+    "max_iterations": 110,
+    "position_tolerance": 0.010,
+    "orientation_tolerance": 0.11,
+    "orientation_weight": 0.28
+  },
+  "safety": {
+    "table": {
+      "enabled": true,
+      "frame": "link_base",
+      "min_tcp_z_base": 0.13,
+      "collision_box": {
+        "id": "gazebo_table_top",
+        "center_base": [-0.34, -0.20, -0.04],
+        "size": [0.95, 1.25, 0.08]
+      }
+    }
+  },
+  "moveit2": {
+    "enabled": true,
+    "group_name": "xarm7",
+    "planning_service": "/plan_kinematic_path",
+    "apply_scene_service": "/apply_planning_scene",
+    "planner_id": "RRTConnectkConfigDefault",
+    "allowed_planning_time": 4.0,
+    "num_planning_attempts": 5,
+    "max_velocity_scaling_factor": 0.25,
+    "max_acceleration_scaling_factor": 0.25,
+    "joint_goal_tolerance": 0.018,
+    "chunk_seconds": 1.0,
+    "execute_plans": true
+  }
+}

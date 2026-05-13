@@ -1,0 +1,300 @@
+<?xml version="1.0" ?>
+<sdf version="1.7">
+  <world name="default">
+    <plugin name="gz::sim::systems::Physics" filename="gz-sim-physics-system" />
+    <plugin name="gz::sim::systems::UserCommands" filename="gz-sim-user-commands-system" />
+    <plugin name="gz::sim::systems::SceneBroadcaster" filename="gz-sim-scene-broadcaster-system" />
+    <plugin name="gz::sim::systems::Contact" filename="gz-sim-contact-system" />
+    <plugin name="gz::sim::systems::Sensors" filename="gz-sim-sensors-system">
+      <render_engine>ogre2</render_engine>
+    </plugin>
+
+    <include>
+      <uri>
+        https://fuel.gazebosim.org/1.0/OpenRobotics/models/Ground Plane
+      </uri>
+    </include>
+    <include>
+      <uri>
+        https://fuel.gazebosim.org/1.0/OpenRobotics/models/Sun
+      </uri>
+    </include>
+    <include>
+      <uri>https://fuel.gazebosim.org/1.0/OpenRobotics/models/Table</uri>
+      <name>table</name>
+      <pose>0.0 -0.84 0 0 0 0</pose>
+    </include>
+
+    <model name="red_cup_target">
+      <pose>0.34 -0.93 1.065 0 0 0</pose>
+      <static>true</static>
+      <link name="cup_body">
+        <inertial>
+          <mass>0.08</mass>
+          <inertia>
+            <ixx>0.00005</ixx>
+            <iyy>0.00005</iyy>
+            <izz>0.00004</izz>
+          </inertia>
+        </inertial>
+        <collision name="cup_collision">
+          <geometry>
+            <cylinder>
+              <radius>0.035</radius>
+              <length>0.105</length>
+            </cylinder>
+          </geometry>
+        </collision>
+        <visual name="cup_red_outer">
+          <geometry>
+            <cylinder>
+              <radius>0.036</radius>
+              <length>0.105</length>
+            </cylinder>
+          </geometry>
+          <material>
+            <ambient>0.9 0.03 0.02 1</ambient>
+            <diffuse>0.9 0.03 0.02 1</diffuse>
+            <specular>0.3 0.08 0.06 1</specular>
+          </material>
+        </visual>
+        <visual name="cup_dark_inner">
+          <pose>0 0 0.054 0 0 0</pose>
+          <geometry>
+            <cylinder>
+              <radius>0.028</radius>
+              <length>0.004</length>
+            </cylinder>
+          </geometry>
+          <material>
+            <ambient>0.03 0.02 0.018 1</ambient>
+            <diffuse>0.03 0.02 0.018 1</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <include>
+      <uri>model://smplx_operator</uri>
+      <name>smplx_operator_visual</name>
+    </include>
+
+    <model name="realsense_d455_tripod">
+      <pose>-1.20 -3.10 0 0 0 1.12</pose>
+      <static>true</static>
+      <link name="tripod_and_camera">
+        <visual name="center_column">
+          <pose>0 0 0.62 0 0 0</pose>
+          <geometry>
+            <cylinder>
+              <radius>0.018</radius>
+              <length>1.24</length>
+            </cylinder>
+          </geometry>
+          <material>
+            <ambient>0.05 0.055 0.06 1</ambient>
+            <diffuse>0.05 0.055 0.06 1</diffuse>
+          </material>
+        </visual>
+        <collision name="center_column_collision">
+          <pose>0 0 0.62 0 0 0</pose>
+          <geometry>
+            <cylinder>
+              <radius>0.018</radius>
+              <length>1.24</length>
+            </cylinder>
+          </geometry>
+        </collision>
+
+        <visual name="leg_front">
+          <pose>0.18 0 0.32 0 0.58 0</pose>
+          <geometry>
+            <cylinder>
+              <radius>0.012</radius>
+              <length>0.72</length>
+            </cylinder>
+          </geometry>
+          <material>
+            <ambient>0.02 0.02 0.023 1</ambient>
+            <diffuse>0.02 0.02 0.023 1</diffuse>
+          </material>
+        </visual>
+        <visual name="leg_left">
+          <pose>-0.09 0.156 0.32 0 -0.58 2.094</pose>
+          <geometry>
+            <cylinder>
+              <radius>0.012</radius>
+              <length>0.72</length>
+            </cylinder>
+          </geometry>
+          <material>
+            <ambient>0.02 0.02 0.023 1</ambient>
+            <diffuse>0.02 0.02 0.023 1</diffuse>
+          </material>
+        </visual>
+        <visual name="leg_right">
+          <pose>-0.09 -0.156 0.32 0 -0.58 -2.094</pose>
+          <geometry>
+            <cylinder>
+              <radius>0.012</radius>
+              <length>0.72</length>
+            </cylinder>
+          </geometry>
+          <material>
+            <ambient>0.02 0.02 0.023 1</ambient>
+            <diffuse>0.02 0.02 0.023 1</diffuse>
+          </material>
+        </visual>
+
+        <visual name="tripod_head">
+          <pose>0 0 1.26 0 0 0</pose>
+          <geometry>
+            <sphere>
+              <radius>0.045</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.08 0.08 0.085 1</ambient>
+            <diffuse>0.08 0.08 0.085 1</diffuse>
+          </material>
+        </visual>
+
+        <visual name="d455_body">
+          <pose>0.04 0 1.34 0 0.20 0</pose>
+          <geometry>
+            <box>
+              <size>0.145 0.035 0.035</size>
+            </box>
+          </geometry>
+          <material>
+            <ambient>0.62 0.64 0.66 1</ambient>
+            <diffuse>0.62 0.64 0.66 1</diffuse>
+            <specular>0.25 0.25 0.25 1</specular>
+          </material>
+        </visual>
+        <visual name="d455_front_glass">
+          <pose>0.06 0 1.34 0 0.20 0</pose>
+          <geometry>
+            <box>
+              <size>0.004 0.13 0.026</size>
+            </box>
+          </geometry>
+          <material>
+            <ambient>0.01 0.012 0.016 1</ambient>
+            <diffuse>0.01 0.012 0.016 1</diffuse>
+          </material>
+        </visual>
+        <visual name="d455_left_lens">
+          <pose>0.064 0.045 1.34 0 1.5708 0</pose>
+          <geometry>
+            <cylinder>
+              <radius>0.012</radius>
+              <length>0.006</length>
+            </cylinder>
+          </geometry>
+          <material>
+            <ambient>0.005 0.005 0.008 1</ambient>
+            <diffuse>0.005 0.005 0.008 1</diffuse>
+          </material>
+        </visual>
+        <visual name="d455_right_lens">
+          <pose>0.064 -0.045 1.34 0 1.5708 0</pose>
+          <geometry>
+            <cylinder>
+              <radius>0.012</radius>
+              <length>0.006</length>
+            </cylinder>
+          </geometry>
+          <material>
+            <ambient>0.005 0.005 0.008 1</ambient>
+            <diffuse>0.005 0.005 0.008 1</diffuse>
+          </material>
+        </visual>
+        <visual name="d455_projector">
+          <pose>0.064 0 1.34 0 1.5708 0</pose>
+          <geometry>
+            <cylinder>
+              <radius>0.01</radius>
+              <length>0.006</length>
+            </cylinder>
+          </geometry>
+          <material>
+            <ambient>0.0 0.08 0.16 1</ambient>
+            <diffuse>0.0 0.12 0.25 1</diffuse>
+          </material>
+        </visual>
+
+        <sensor name="d455_rgbd_sensor" type="rgbd_camera">
+          <pose>0.08 0 1.44 0 0.12 0</pose>
+          <always_on>true</always_on>
+          <update_rate>15</update_rate>
+          <topic>/tripod_d455/depth</topic>
+          <camera>
+            <horizontal_fov>2.05</horizontal_fov>
+            <image>
+              <width>848</width>
+              <height>480</height>
+              <format>R8G8B8</format>
+            </image>
+            <clip>
+              <near>0.1</near>
+              <far>8.0</far>
+            </clip>
+            <depth_camera>
+              <clip>
+                <near>0.1</near>
+                <far>8.0</far>
+              </clip>
+            </depth_camera>
+          </camera>
+        </sensor>
+      </link>
+    </model>
+
+    <model name="retarget_closeup_camera">
+      <pose>-1.05 -2.20 1.55 0 0 0.25</pose>
+      <static>true</static>
+      <link name="closeup_camera_link">
+        <pose>0 0 0 0 0 0</pose>
+        <visual name="camera_body">
+          <geometry>
+            <box>
+              <size>0.12 0.05 0.05</size>
+            </box>
+          </geometry>
+          <material>
+            <ambient>0.02 0.025 0.03 1</ambient>
+            <diffuse>0.02 0.025 0.03 1</diffuse>
+          </material>
+        </visual>
+        <sensor name="retarget_closeup_sensor" type="camera">
+          <pose>0 0 0 0 0.22 0.55</pose>
+          <always_on>true</always_on>
+          <update_rate>15</update_rate>
+          <topic>/retarget_closeup/image</topic>
+          <camera>
+            <horizontal_fov>0.78</horizontal_fov>
+            <image>
+              <width>1600</width>
+              <height>1000</height>
+              <format>R8G8B8</format>
+            </image>
+            <clip>
+              <near>0.05</near>
+              <far>6.0</far>
+            </clip>
+          </camera>
+        </sensor>
+      </link>
+    </model>
+
+    <physics type="ode">
+      <max_step_size>0.001</max_step_size>
+      <real_time_factor>1</real_time_factor>
+      <real_time_update_rate>1000</real_time_update_rate>
+      <!-- (2022-12-20) humble: change gravity from [0 0 -9.81] to [0 0 0] -->
+      <gravity>0 0 0</gravity>
+    </physics>
+
+  </world>
+</sdf>

@@ -1,0 +1,77 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://ros.org/wiki/xacro" name="soft_four_finger_gripper">
+
+  <xacro:macro name="soft_finger_link" params="prefix name x y yaw tilt">
+    <link name="${prefix}${name}">
+      <inertial>
+        <origin xyz="0 0 0.055" rpy="0 0 0"/>
+        <mass value="0.035"/>
+        <inertia ixx="0.000012" ixy="0" ixz="0" iyy="0.000012" iyz="0" izz="0.000003"/>
+      </inertial>
+      <visual>
+        <origin xyz="0 0 0.055" rpy="0 ${tilt} 0"/>
+        <geometry>
+          <box size="0.018 0.026 0.115"/>
+        </geometry>
+        <material name="${prefix}SoftFingerBlue">
+          <color rgba="0.05 0.22 0.42 1.0"/>
+        </material>
+      </visual>
+      <collision>
+        <origin xyz="0 0 0.055" rpy="0 ${tilt} 0"/>
+        <geometry>
+          <box size="0.018 0.026 0.115"/>
+        </geometry>
+      </collision>
+    </link>
+    <joint name="${prefix}${name}_joint" type="fixed">
+      <parent link="${prefix}soft_gripper_palm"/>
+      <child link="${prefix}${name}"/>
+      <origin xyz="${x} ${y} 0.04" rpy="0 0 ${yaw}"/>
+    </joint>
+  </xacro:macro>
+
+  <xacro:macro name="soft_four_finger_gripper" params="prefix:='' attach_to:='' attach_xyz:='0 0 0' attach_rpy:='0 0 0'">
+    <joint name="${prefix}soft_gripper_mount_joint" type="fixed">
+      <parent link="${attach_to}"/>
+      <child link="${prefix}soft_gripper_palm"/>
+      <origin xyz="${attach_xyz}" rpy="${attach_rpy}"/>
+    </joint>
+
+    <link name="${prefix}soft_gripper_palm">
+      <inertial>
+        <origin xyz="0 0 0.025" rpy="0 0 0"/>
+        <mass value="0.22"/>
+        <inertia ixx="0.00018" ixy="0" ixz="0" iyy="0.00018" iyz="0" izz="0.00012"/>
+      </inertial>
+      <visual>
+        <origin xyz="0 0 0.025" rpy="0 0 0"/>
+        <geometry>
+          <cylinder radius="0.052" length="0.05"/>
+        </geometry>
+        <material name="${prefix}SoftGripperPalm">
+          <color rgba="0.12 0.13 0.15 1.0"/>
+        </material>
+      </visual>
+      <collision>
+        <origin xyz="0 0 0.025" rpy="0 0 0"/>
+        <geometry>
+          <cylinder radius="0.052" length="0.05"/>
+        </geometry>
+      </collision>
+    </link>
+
+    <xacro:soft_finger_link prefix="${prefix}" name="soft_finger_front" x="0.041" y="0" yaw="0" tilt="-0.22"/>
+    <xacro:soft_finger_link prefix="${prefix}" name="soft_finger_back" x="-0.041" y="0" yaw="3.14159" tilt="-0.22"/>
+    <xacro:soft_finger_link prefix="${prefix}" name="soft_finger_left" x="0" y="0.041" yaw="1.5708" tilt="-0.22"/>
+    <xacro:soft_finger_link prefix="${prefix}" name="soft_finger_right" x="0" y="-0.041" yaw="-1.5708" tilt="-0.22"/>
+
+    <link name="${prefix}link_tcp"/>
+    <joint name="${prefix}joint_tcp" type="fixed">
+      <parent link="${prefix}soft_gripper_palm"/>
+      <child link="${prefix}link_tcp"/>
+      <origin xyz="0 0 0.17" rpy="0 0 0"/>
+    </joint>
+  </xacro:macro>
+</robot>
+

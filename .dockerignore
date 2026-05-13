@@ -1,0 +1,13 @@
+.git
+.DS_Store
+**/.git
+**/.gitmodules
+**/build
+**/install
+**/log
+**/__pycache__
+**/*.pyc
+recordings
+*.mcap
+*.mp4
+*.png

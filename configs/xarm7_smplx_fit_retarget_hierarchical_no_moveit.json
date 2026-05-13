@@ -1,0 +1,170 @@
+{
+  "schema": "xarm7_smplx_retarget_calibration.v1",
+  "description": "Hierarchical teleoperation retarget: SMPL-X right hand maps to the soft gripper TCP/palm, the forearm direction maps to the xArm7 distal chain from joint4/link4 toward link_tcp, and the upper-arm/elbow relation only biases xArm7 elbow swivel inside the primary wrist-pose null-space. MoveIt2 and table safety are disabled for raw motion comparison.",
+  "frames": {
+    "world": "gazebo_default_world",
+    "robot_base": "link_base",
+    "target_tip": "link_tcp"
+  },
+  "robot_world": {
+    "position": [-0.2, -0.5, 1.021],
+    "yaw": 1.571
+  },
+  "source": {
+    "type": "fitted_smplx_right_arm_trajectory",
+    "trajectory_json_schema": "smplx_fit_right_arm_trajectory/v1 samples[].right_wrist_world/right_elbow_world/right_shoulder_world"
+  },
+  "teleoperation_mapping": {
+    "principle": "Functional teleoperation mapping, not one-to-one anatomical link matching.",
+    "hand": {
+      "smplx": ["right_wrist", "right_hand/palm_center"],
+      "xarm7": ["link_tcp", "soft_gripper_palm"],
+      "objective": "Primary TCP position and gripper/palm pose."
+    },
+    "forearm": {
+      "smplx": "right_elbow -> right_wrist",
+      "xarm7": "joint5 origin elbow proxy -> link_tcp distal chain",
+      "objective": "Primary gripper approach orientation; secondary distal-chain direction."
+    },
+    "upper_arm": {
+      "smplx": "right_shoulder -> right_elbow",
+      "xarm7": "joint3 origin shoulder proxy -> joint5 origin elbow proxy",
+      "objective": "Secondary null-space elbow-swivel posture bias only."
+    }
+  },
+  "cup_world": [0.34, -0.93, 1.065],
+  "task": {
+    "mode": "cup_base_relative",
+    "tcp_grasp_offset_world": [0.0, 0.0, 0.105],
+    "visual_grasp_offset_world": [0.0, 0.0, 0.0],
+    "waypoints_base_from_tcp_grasp": {
+      "ready": [-0.18, 0.17, 0.16],
+      "hover": [0.0, 0.0, 0.16],
+      "grasp": [0.0, 0.0, 0.10],
+      "lift": [0.0, 0.0, 0.30]
+    }
+  },
+  "orientation": {
+    "mode": "table_edge_soft_functional",
+    "forearm_axis": "z",
+    "approach_axis": "z",
+    "approach_target_base": [-0.43, -0.54, 0.15],
+    "approach_direction_base": [-0.75, -0.65, -0.15],
+    "downward_blend": 0.18,
+    "reference_up_base": [0.0, 0.0, 1.0],
+    "rotation_base": [
+      [1.0, 0.0, 0.0],
+      [0.0, -1.0, 0.0],
+      [0.0, 0.0, -1.0]
+    ]
+  },
+  "full_arm": {
+    "robot_shoulder_anchor_base": [0.0, 0.0, 0.267],
+    "robot_elbow_joint_index": 3,
+    "robot_upper_arm_length": 0.30,
+    "min_bend_angle_deg": 25.0,
+    "max_bend_angle_deg": 132.0,
+    "primary_damping": 0.055,
+    "secondary_damping": 0.090,
+    "secondary_step_scale": 0.70,
+    "max_step": 0.055,
+    "elbow_weight": 0.12,
+    "elbow_tolerance": 0.110
+  },
+  "functional": {
+    "source_vector_rotation_base": [
+      [-1.0, 0.0, 0.0],
+      [0.0, 1.0, 0.0],
+      [0.0, 0.0, 1.0]
+    ],
+    "robot_shoulder_anchor_base": [0.0, 0.0, 0.267],
+    "robot_shoulder_joint_index": 2,
+    "robot_elbow_joint_index": 4,
+    "min_projection_norm": 0.025,
+    "primary_damping": 0.045,
+    "secondary_damping": 0.075,
+    "secondary_step_scale": 0.65,
+    "secondary_position_guard": 0.070,
+    "max_step": 0.055,
+    "finite_difference_step": 0.0001,
+    "forearm_weight": 0.12,
+    "upper_arm_weight": 0.05,
+    "joint_regularization_weight": 0.08,
+    "forearm_tolerance_deg": 70.0,
+    "upper_arm_tolerance_deg": 85.0,
+    "branch_recovery_enabled": true,
+    "branch_recovery_forearm_trigger_deg": 65.0,
+    "branch_recovery_upper_trigger_deg": 80.0,
+    "branch_recovery_position_trigger_scale": 2.5,
+    "branch_recovery_offsets_rad": [-1.2, -0.6, 0.6, 1.2],
+    "branch_recovery_position_weight": 2.0,
+    "branch_recovery_forearm_weight": 1.0,
+    "branch_recovery_upper_arm_weight": 1.0,
+    "branch_recovery_joint_weight": 0.08
+  },
+  "target_limits_base": {
+    "min": [-0.52, -0.54, 0.09],
+    "max": [-0.16, -0.24, 0.45]
+  },
+  "workspace_conditioning": {
+    "global_affine": {
+      "enabled": true,
+      "source_min": [0.026, -0.229, -0.160],
+      "source_max": [0.550, 0.260, 0.426],
+      "target_min": [-0.47, -0.50, 0.10],
+      "target_max": [-0.22, -0.28, 0.40],
+      "axes": [0, 1, 2],
+      "clip_ratio": true
+    },
+    "local_windows": []
+  },
+  "anti_self_insertion": {
+    "enabled": true,
+    "safe_direction_base": [-0.75, -0.65, 0.0],
+    "tool_axis": "z",
+    "min_forearm_alignment": -0.02,
+    "min_tool_alignment": 0.20,
+    "tool_penalty_scale": 1.4,
+    "tolerance": 0.02,
+    "weight": 2.5
+  },
+  "ik": {
+    "controller_blend_in_seconds": 3.0,
+    "max_iterations": 220,
+    "position_tolerance": 0.014,
+    "orientation_tolerance": 0.30,
+    "orientation_weight": 0.12,
+    "max_frame_joint_delta_rad": 10.0
+  },
+  "execution": {
+    "time_scale": 3.0,
+    "path_tolerance_rad": 3.14,
+    "goal_tolerance_rad": 0.12
+  },
+  "safety": {
+    "table": {
+      "enabled": false,
+      "frame": "link_base",
+      "min_tcp_z_base": null,
+      "collision_box": {
+        "id": "gazebo_table_top",
+        "center_base": [-0.34, -0.20, -0.04],
+        "size": [0.95, 1.25, 0.08]
+      }
+    }
+  },
+  "moveit2": {
+    "enabled": false,
+    "group_name": "xarm7",
+    "planning_service": "/plan_kinematic_path",
+    "apply_scene_service": "/apply_planning_scene",
+    "planner_id": "RRTConnectkConfigDefault",
+    "allowed_planning_time": 4.0,
+    "num_planning_attempts": 5,
+    "max_velocity_scaling_factor": 0.25,
+    "max_acceleration_scaling_factor": 0.25,
+    "joint_goal_tolerance": 0.020,
+    "chunk_seconds": 1.0,
+    "execute_plans": false
+  }
+}

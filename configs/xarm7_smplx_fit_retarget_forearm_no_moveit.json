@@ -1,0 +1,76 @@
+{
+  "schema": "xarm7_smplx_retarget_calibration.v1",
+  "description": "Direct dense-controller retarget of fitted SMPL-X right-arm trajectory to xArm7. MoveIt2/table safety are disabled, and the gripper orientation follows the fitted SMPL-X elbow-to-wrist forearm vector instead of being forced TCP-Z-down.",
+  "frames": {
+    "world": "gazebo_default_world",
+    "robot_base": "link_base",
+    "target_tip": "link_tcp"
+  },
+  "robot_world": {
+    "position": [-0.2, -0.5, 1.021],
+    "yaw": 1.571
+  },
+  "source": {
+    "type": "fitted_smplx_right_arm_trajectory",
+    "trajectory_json_schema": "smplx_fit_right_arm_trajectory/v1 samples[].right_wrist_world/right_elbow_world/right_shoulder_world"
+  },
+  "cup_world": [0.34, -0.93, 1.065],
+  "task": {
+    "mode": "cup_base_relative",
+    "tcp_grasp_offset_world": [0.0, 0.0, 0.105],
+    "visual_grasp_offset_world": [0.0, 0.0, 0.0],
+    "waypoints_base_from_tcp_grasp": {
+      "ready": [-0.18, 0.17, 0.16],
+      "hover": [0.0, 0.0, 0.16],
+      "grasp": [0.0, 0.0, 0.10],
+      "lift": [0.0, 0.0, 0.30]
+    }
+  },
+  "orientation": {
+    "mode": "forearm_aligned",
+    "forearm_axis": "z",
+    "reference_up_base": [0.0, 0.0, 1.0],
+    "rotation_base": [
+      [1.0, 0.0, 0.0],
+      [0.0, -1.0, 0.0],
+      [0.0, 0.0, -1.0]
+    ]
+  },
+  "target_limits_base": {
+    "min": [0.0, -0.30, -0.20],
+    "max": [0.58, 0.30, 0.56]
+  },
+  "ik": {
+    "controller_blend_in_seconds": 0.0,
+    "max_iterations": 280,
+    "position_tolerance": 0.014,
+    "orientation_tolerance": 0.20,
+    "orientation_weight": 0.08
+  },
+  "safety": {
+    "table": {
+      "enabled": false,
+      "frame": "link_base",
+      "min_tcp_z_base": null,
+      "collision_box": {
+        "id": "gazebo_table_top",
+        "center_base": [-0.34, -0.20, -0.04],
+        "size": [0.95, 1.25, 0.08]
+      }
+    }
+  },
+  "moveit2": {
+    "enabled": false,
+    "group_name": "xarm7",
+    "planning_service": "/plan_kinematic_path",
+    "apply_scene_service": "/apply_planning_scene",
+    "planner_id": "RRTConnectkConfigDefault",
+    "allowed_planning_time": 4.0,
+    "num_planning_attempts": 5,
+    "max_velocity_scaling_factor": 0.25,
+    "max_acceleration_scaling_factor": 0.25,
+    "joint_goal_tolerance": 0.020,
+    "chunk_seconds": 1.0,
+    "execute_plans": false
+  }
+}

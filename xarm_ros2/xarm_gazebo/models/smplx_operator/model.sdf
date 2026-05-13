@@ -1,0 +1,34 @@
+<?xml version="1.0"?>
+<sdf version="1.10">
+  <model name="smplx_operator">
+    <static>true</static>
+    <pose>-0.283 -1.127 0 0 0 3.55</pose>
+    <link name="body">
+      <visual name="smplx_body_visual">
+        <pose>0 0 1.26 1.5708 0 0</pose>
+        <geometry>
+          <mesh>
+            <uri>model://smplx_operator/meshes/smplx_operator.obj</uri>
+            <scale>1 1 1</scale>
+          </mesh>
+        </geometry>
+      </visual>
+      <collision name="torso_proxy_collision">
+        <pose>0 0 1.0 0 0 0</pose>
+        <geometry>
+          <box>
+            <size>0.36 0.22 0.72</size>
+          </box>
+        </geometry>
+      </collision>
+      <collision name="head_proxy_collision">
+        <pose>0 0 1.55 0 0 0</pose>
+        <geometry>
+          <sphere>
+            <radius>0.12</radius>
+          </sphere>
+        </geometry>
+      </collision>
+    </link>
+  </model>
+</sdf>

@@ -1175,6 +1175,179 @@ class KinematicChain:
             last_metrics,
         )
 
+    def solve_ocra_baseline(
+        self,
+        target,
+        desired_rotation,
+        wrist_base,
+        elbow_base,
+        shoulder_base,
+        seed,
+        robot_shoulder_anchor,
+        elbow_joint_index=3,
+        shoulder_joint_index=None,
+        iterations=180,
+        damping=0.065,
+        alpha=0.67,
+        beta=0.33,
+        target_position_weight=0.0,
+        joint_regularization_weight=0.03,
+        source_anchor_mode="absolute",
+        robot_upper_arm_length=0.30,
+        robot_forearm_length=0.34,
+        position_tolerance=0.025,
+        skeleton_tolerance=0.060,
+        orientation_tolerance=0.45,
+        max_step=0.060,
+        finite_difference_step=1e-4,
+    ):
+        q = np.asarray(seed, dtype=float).copy()
+        reference_q = q.copy()
+        target = np.asarray(target, dtype=float)
+        desired_rotation = np.asarray(desired_rotation, dtype=float)
+        wrist_base = np.asarray(wrist_base, dtype=float)
+        elbow_base = np.asarray(elbow_base, dtype=float)
+        shoulder_base = np.asarray(shoulder_base, dtype=float)
+        robot_shoulder_anchor = np.asarray(robot_shoulder_anchor, dtype=float)
+        elbow_joint_index = int(elbow_joint_index)
+        joint_count = len(q)
+
+        alpha = max(0.0, float(alpha))
+        beta = max(0.0, float(beta))
+        total = alpha + beta
+        if total <= 1e-9:
+            alpha, beta = 1.0, 0.0
+        else:
+            alpha, beta = alpha / total, beta / total
+
+        source_rotation = functional_source_vector_rotation_base()
+        source_forearm = source_rotation @ (wrist_base - elbow_base)
+        source_upper = source_rotation @ (elbow_base - shoulder_base)
+        if source_anchor_mode == "robot_shoulder_scaled":
+            source_shoulder = robot_shoulder_anchor.copy()
+            source_elbow = source_shoulder + normalized(source_upper, [1.0, 0.0, 0.0]) * float(robot_upper_arm_length)
+            source_wrist = source_elbow + normalized(source_forearm, [1.0, 0.0, 0.0]) * float(robot_forearm_length)
+        elif source_anchor_mode == "absolute":
+            source_wrist = target.copy()
+            source_elbow = source_wrist - source_forearm
+            source_shoulder = source_elbow - source_upper
+        else:
+            raise RuntimeError("ocra.source_anchor_mode must be 'absolute' or 'robot_shoulder_scaled'")
+
+        source_points = np.vstack([source_shoulder, source_elbow, source_wrist])
+        source_chain_length = (
+            np.linalg.norm(source_elbow - source_shoulder)
+            + np.linalg.norm(source_wrist - source_elbow)
+        )
+        normalizer = max(float(source_chain_length), 1e-6)
+        sqrt_alpha = math.sqrt(alpha)
+        sqrt_beta = math.sqrt(beta)
+        target_position_weight = max(0.0, float(target_position_weight))
+        joint_regularization_weight = max(0.0, float(joint_regularization_weight))
+
+        def robot_skeleton(q_state):
+            transform, joint_positions, _ = self.fk(q_state)
+            tcp = transform[:3, 3]
+            elbow = joint_positions[elbow_joint_index]
+            if shoulder_joint_index is None:
+                shoulder = robot_shoulder_anchor
+            else:
+                shoulder = joint_positions[int(shoulder_joint_index)]
+            return np.vstack([shoulder, elbow, tcp]), transform
+
+        def error_vector(q_state):
+            robot_points, transform = robot_skeleton(q_state)
+            tcp = transform[:3, 3]
+            skeleton_error = ((source_points - robot_points) / normalizer).reshape(-1)
+            orientation_error = orientation_error_vector(transform[:3, :3], desired_rotation)
+            blocks = [
+                sqrt_alpha * skeleton_error,
+                sqrt_beta * orientation_error,
+            ]
+            if target_position_weight > 0.0:
+                blocks.append(target_position_weight * ((target - tcp) / normalizer))
+            if joint_regularization_weight > 0.0:
+                blocks.append(joint_regularization_weight * (reference_q - q_state))
+            return np.concatenate(blocks)
+
+        def metrics(q_state):
+            robot_points, transform = robot_skeleton(q_state)
+            tcp = transform[:3, 3]
+            skeleton_delta = source_points - robot_points
+            per_point = np.linalg.norm(skeleton_delta, axis=1)
+            orientation = orientation_error_vector(transform[:3, :3], desired_rotation)
+            position = target - tcp
+            objective = (
+                alpha * float(np.dot((skeleton_delta / normalizer).reshape(-1), (skeleton_delta / normalizer).reshape(-1)))
+                + beta * float(np.dot(orientation, orientation))
+            )
+            if target_position_weight > 0.0:
+                objective += target_position_weight * float(np.dot(position / normalizer, position / normalizer))
+            if joint_regularization_weight > 0.0:
+                regularization = reference_q - q_state
+                objective += joint_regularization_weight * float(np.dot(regularization, regularization))
+            return {
+                "ocra_alpha": alpha,
+                "ocra_beta": beta,
+                "ocra_objective": objective,
+                "ocra_source_anchor_mode": source_anchor_mode,
+                "ocra_skeleton_rmse_m": float(math.sqrt(np.mean(per_point * per_point))),
+                "ocra_skeleton_max_m": float(np.max(per_point)),
+                "ocra_skeleton_shoulder_error_m": float(per_point[0]),
+                "ocra_skeleton_elbow_error_m": float(per_point[1]),
+                "ocra_skeleton_wrist_error_m": float(per_point[2]),
+                "ocra_orientation_norm_rad": float(np.linalg.norm(orientation)),
+                "ocra_target_position_error_m": float(np.linalg.norm(position)),
+                "ocra_source_shoulder_base": source_shoulder,
+                "ocra_source_elbow_base": source_elbow,
+                "ocra_source_wrist_base": source_wrist,
+            }
+
+        last_metrics = None
+        for _ in range(iterations):
+            error = error_vector(q)
+            last_metrics = metrics(q)
+            if (
+                last_metrics["ocra_skeleton_rmse_m"] < skeleton_tolerance
+                and last_metrics["ocra_orientation_norm_rad"] < orientation_tolerance
+                and (
+                    target_position_weight <= 0.0
+                    or last_metrics["ocra_target_position_error_m"] < position_tolerance
+                )
+            ):
+                return (
+                    q,
+                    True,
+                    last_metrics["ocra_target_position_error_m"],
+                    last_metrics["ocra_orientation_norm_rad"],
+                    last_metrics["ocra_skeleton_rmse_m"],
+                    last_metrics,
+                )
+
+            jacobian = np.zeros((len(error), joint_count), dtype=float)
+            for idx in range(joint_count):
+                q_eps = q.copy()
+                q_eps[idx] += finite_difference_step
+                jacobian[:, idx] = (error_vector(q_eps) - error) / finite_difference_step
+            dq = -self.damped_pseudoinverse(jacobian, damping) @ error
+            largest_step = float(np.max(np.abs(dq)))
+            if largest_step > max_step:
+                dq *= max_step / largest_step
+            q += dq
+            for idx, (lower, upper) in enumerate(self.limits):
+                if math.isfinite(lower) or math.isfinite(upper):
+                    q[idx] = np.clip(q[idx], lower, upper)
+
+        last_metrics = metrics(q)
+        return (
+            q,
+            False,
+            last_metrics["ocra_target_position_error_m"],
+            last_metrics["ocra_orientation_norm_rad"],
+            last_metrics["ocra_skeleton_rmse_m"],
+            last_metrics,
+        )
+
 
 def world_to_robot_base(point_world):
     c = math.cos(-ROBOT_WORLD_YAW)
@@ -1796,6 +1969,7 @@ def build_trajectory(chain, seed, seconds, fps, reconstructed_trajectory=None, c
                     "full_arm_hierarchical",
                     "functional_hierarchical",
                     "table_edge_soft_functional",
+                    "ocra_baseline",
                 ) and arm.get("right_elbow_world") is not None:
                     wrist_base = observed_target
                     elbow_base = global_workspace_transform_base(world_to_robot_base(arm["right_elbow_world"]))
@@ -1848,7 +2022,39 @@ def build_trajectory(chain, seed, seconds, fps, reconstructed_trajectory=None, c
         q_before_ik = q.copy()
         joint_delta_limited = False
         if use_pose_ik:
-            if orientation_mode == "table_edge_soft_functional" and shoulder_base is not None and elbow_base is not None:
+            if orientation_mode == "ocra_baseline" and shoulder_base is not None and elbow_base is not None:
+                ocra_config = RETARGET_RUNTIME_CONFIG.get("ocra", {})
+                q, converged, error, orientation_error, elbow_error, functional_metrics = chain.solve_ocra_baseline(
+                    target,
+                    desired_rotation,
+                    wrist_base,
+                    elbow_base,
+                    shoulder_base,
+                    q,
+                    robot_shoulder_anchor=robot_shoulder_anchor_base(),
+                    elbow_joint_index=int(ocra_config.get("robot_elbow_joint_index", robot_elbow_joint_index())),
+                    shoulder_joint_index=ocra_config.get("robot_shoulder_joint_index", robot_shoulder_joint_index()),
+                    iterations=int(ik_config.get("max_iterations", 180)),
+                    damping=float(ocra_config.get("damping", 0.065)),
+                    alpha=float(ocra_config.get("alpha", 0.67)),
+                    beta=float(ocra_config.get("beta", 0.33)),
+                    target_position_weight=float(ocra_config.get("target_position_weight", 0.0)),
+                    joint_regularization_weight=float(ocra_config.get("joint_regularization_weight", 0.03)),
+                    source_anchor_mode=ocra_config.get("source_anchor_mode", "absolute"),
+                    robot_upper_arm_length=float(ocra_config.get("robot_upper_arm_length", 0.30)),
+                    robot_forearm_length=float(ocra_config.get("robot_forearm_length", 0.34)),
+                    position_tolerance=float(ik_config.get("position_tolerance", 0.025)),
+                    skeleton_tolerance=float(ocra_config.get("skeleton_tolerance", 0.060)),
+                    orientation_tolerance=float(ik_config.get("orientation_tolerance", 0.45)),
+                    max_step=float(ocra_config.get("max_step", 0.060)),
+                    finite_difference_step=float(ocra_config.get("finite_difference_step", 1e-4)),
+                )
+                solver_metrics = dict(functional_metrics or {})
+                functional_metrics = compute_functional_metrics(chain, q, wrist_base, elbow_base, shoulder_base)
+                functional_metrics.update(solver_metrics)
+                orientation_error = float(functional_metrics.get("ocra_orientation_norm_rad", orientation_error))
+                elbow_error = float(functional_metrics.get("ocra_skeleton_rmse_m", elbow_error))
+            elif orientation_mode == "table_edge_soft_functional" and shoulder_base is not None and elbow_base is not None:
                 functional_config = RETARGET_RUNTIME_CONFIG.get("functional", {})
                 anti_config = RETARGET_RUNTIME_CONFIG.get("anti_self_insertion", {})
                 q, converged, error, orientation_error, elbow_error, functional_metrics = chain.solve_table_edge_soft_functional_hierarchical(
@@ -2090,7 +2296,13 @@ def build_trajectory(chain, seed, seconds, fps, reconstructed_trajectory=None, c
             if joint_delta_limited:
                 error = float(np.linalg.norm(np.asarray(target, dtype=float) - transform[:3, 3]))
         if wrist_base is not None and elbow_base is not None and shoulder_base is not None:
+            solver_metric_overrides = {
+                key: value
+                for key, value in (functional_metrics or {}).items()
+                if key.startswith("ocra_")
+            }
             functional_metrics = compute_functional_metrics(chain, q, wrist_base, elbow_base, shoulder_base)
+            functional_metrics.update(solver_metric_overrides)
             if orientation_mode == "table_edge_soft_functional":
                 orientation_error = float(np.linalg.norm(orientation_error_vector(transform[:3, :3], desired_rotation)))
                 functional_metrics["orientation_norm_rad"] = orientation_error
@@ -2098,6 +2310,9 @@ def build_trajectory(chain, seed, seconds, fps, reconstructed_trajectory=None, c
             elif orientation_mode == "functional_hierarchical":
                 orientation_error = functional_metrics["forearm_max_rad"]
                 elbow_error = functional_metrics["upper_arm_max_rad"]
+            elif orientation_mode == "ocra_baseline":
+                orientation_error = float(functional_metrics.get("ocra_orientation_norm_rad", orientation_error or 0.0))
+                elbow_error = float(functional_metrics.get("ocra_skeleton_rmse_m", elbow_error or 0.0))
         diagnostics.append(
             {
                 "time": round(t, 4),
@@ -2591,6 +2806,7 @@ def main():
                 "full_arm_hierarchical",
                 "functional_hierarchical",
                 "table_edge_soft_functional",
+                "ocra_baseline",
             ) and arm.get("right_elbow_world") is not None:
                 wrist_base = target
                 elbow_base = global_workspace_transform_base(world_to_robot_base(arm["right_elbow_world"]))
@@ -2610,6 +2826,38 @@ def main():
                 q, converged, error = chain.solve_position(target, current_q)
                 orientation_error = None
                 elbow_error = None
+            elif orientation_mode == "ocra_baseline" and shoulder_base is not None and elbow_base is not None:
+                ocra_config = RETARGET_RUNTIME_CONFIG.get("ocra", {})
+                q, converged, error, orientation_error, elbow_error, functional_metrics = chain.solve_ocra_baseline(
+                    target,
+                    desired_rotation,
+                    wrist_base,
+                    elbow_base,
+                    shoulder_base,
+                    current_q,
+                    robot_shoulder_anchor=robot_shoulder_anchor_base(),
+                    elbow_joint_index=int(ocra_config.get("robot_elbow_joint_index", robot_elbow_joint_index())),
+                    shoulder_joint_index=ocra_config.get("robot_shoulder_joint_index", robot_shoulder_joint_index()),
+                    iterations=int(ik_config.get("max_iterations", 180)),
+                    damping=float(ocra_config.get("damping", 0.065)),
+                    alpha=float(ocra_config.get("alpha", 0.67)),
+                    beta=float(ocra_config.get("beta", 0.33)),
+                    target_position_weight=float(ocra_config.get("target_position_weight", 0.0)),
+                    joint_regularization_weight=float(ocra_config.get("joint_regularization_weight", 0.03)),
+                    source_anchor_mode=ocra_config.get("source_anchor_mode", "absolute"),
+                    robot_upper_arm_length=float(ocra_config.get("robot_upper_arm_length", 0.30)),
+                    robot_forearm_length=float(ocra_config.get("robot_forearm_length", 0.34)),
+                    position_tolerance=float(ik_config.get("position_tolerance", 0.025)),
+                    skeleton_tolerance=float(ocra_config.get("skeleton_tolerance", 0.060)),
+                    orientation_tolerance=float(ik_config.get("orientation_tolerance", 0.45)),
+                    max_step=float(ocra_config.get("max_step", 0.060)),
+                    finite_difference_step=float(ocra_config.get("finite_difference_step", 1e-4)),
+                )
+                solver_metrics = dict(functional_metrics or {})
+                functional_metrics = compute_functional_metrics(chain, q, wrist_base, elbow_base, shoulder_base)
+                functional_metrics.update(solver_metrics)
+                orientation_error = float(functional_metrics.get("ocra_orientation_norm_rad", orientation_error))
+                elbow_error = float(functional_metrics.get("ocra_skeleton_rmse_m", elbow_error))
             elif orientation_mode == "table_edge_soft_functional" and shoulder_base is not None and elbow_base is not None:
                 functional_config = RETARGET_RUNTIME_CONFIG.get("functional", {})
                 anti_config = RETARGET_RUNTIME_CONFIG.get("anti_self_insertion", {})
@@ -2741,9 +2989,16 @@ def main():
                 anti_penalty = float(functional_metrics.get("anti_self_penalty", 0.0))
                 anti_alignment = float(functional_metrics.get("anti_self_forearm_alignment", 1.0))
                 tool_alignment = float(functional_metrics.get("anti_self_tool_alignment", 1.0))
+                ocra_text = ""
+                if "ocra_skeleton_rmse_m" in functional_metrics:
+                    ocra_text = (
+                        f" ocra_rmse={functional_metrics['ocra_skeleton_rmse_m']:.3f}"
+                        f" ocra_obj={functional_metrics.get('ocra_objective', 0.0):.3f}"
+                    )
                 functional_text = (
                     f" forearm_deg={forearm_deg} upper_deg={upper_deg}"
                     f" anti={anti_penalty:.3f} align={anti_alignment:.3f} tool={tool_alignment:.3f}"
+                    f"{ocra_text}"
                 )
             print(
                 f"prepose phase={loaded_trajectory_phase_prefix()}-{observed_phase} "
@@ -2806,6 +3061,19 @@ def main():
                 f"min_forearm_alignment={min_alignment:.3f} "
                 f"min_tool_alignment={min_tool_alignment:.3f}"
             )
+            ocra_items = [item for item in functional_items if "ocra_skeleton_rmse_m" in item]
+            if ocra_items:
+                mean_ocra_rmse = sum(float(item["ocra_skeleton_rmse_m"]) for item in ocra_items) / len(ocra_items)
+                max_ocra_rmse = max(float(item["ocra_skeleton_rmse_m"]) for item in ocra_items)
+                mean_ocra_orientation = sum(float(item["ocra_orientation_norm_rad"]) for item in ocra_items) / len(ocra_items)
+                max_ocra_orientation = max(float(item["ocra_orientation_norm_rad"]) for item in ocra_items)
+                mean_ocra_objective = sum(float(item["ocra_objective"]) for item in ocra_items) / len(ocra_items)
+                print(
+                    "ocra_baseline "
+                    f"skeleton_rmse_mean_m={mean_ocra_rmse:.4f} skeleton_rmse_max_m={max_ocra_rmse:.4f} "
+                    f"orientation_mean_rad={mean_ocra_orientation:.3f} orientation_max_rad={max_ocra_orientation:.3f} "
+                    f"objective_mean={mean_ocra_objective:.4f}"
+                )
         for item in diagnostics[:: max(1, int(args.fps))]:
             orientation_text = ""
             if item["orientation_error"] is not None:
@@ -2821,9 +3089,16 @@ def main():
                 anti_penalty = float(functional.get("anti_self_penalty", 0.0))
                 anti_alignment = float(functional.get("anti_self_forearm_alignment", 1.0))
                 tool_alignment = float(functional.get("anti_self_tool_alignment", 1.0))
+                ocra_text = ""
+                if "ocra_skeleton_rmse_m" in functional:
+                    ocra_text = (
+                        f" ocra_rmse={functional['ocra_skeleton_rmse_m']:.3f}"
+                        f" ocra_obj={functional.get('ocra_objective', 0.0):.3f}"
+                    )
                 functional_text = (
                     f" forearm_deg={forearm_deg} upper_deg={upper_deg}"
                     f" anti={anti_penalty:.3f} align={anti_alignment:.3f} tool={tool_alignment:.3f}"
+                    f"{ocra_text}"
                 )
             print(
                 f"{item['time']:>5.2f}s {item['phase']:<19} "

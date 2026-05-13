@@ -113,10 +113,11 @@ def mean_or_zero(values):
 
 
 def make_gate(name, kind, value, threshold, relation):
+    epsilon = 1e-9
     if relation == "<=":
-        passed = value <= threshold
+        passed = value <= threshold + epsilon
     elif relation == ">=":
-        passed = value >= threshold
+        passed = value + epsilon >= threshold
     else:
         raise ValueError(f"Unsupported relation: {relation}")
     return {

@@ -77,7 +77,7 @@ RGB-D / SMPL-X reconstructed human motion
 2. SEW-Mimic-style solver：已完成第一版 geometric elbow-swivel baseline，見 `docs/sew_mimic_style_baseline_zh.md` 與 `configs/xarm7_sew_mimic_baseline_no_moveit.json`。
 3. SEW + functional hybrid：已完成第一版 SEW seed + null-space correction，見 `docs/sew_functional_hybrid_zh.md` 與 `configs/xarm7_sew_functional_hybrid_no_moveit.json`。
 4. RGB-D DLS baseline：已完成第一版 hand/TCP-only DLS baseline，見 `docs/rgbd_dls_baseline_zh.md` 與 `configs/xarm7_rgbd_dls_baseline_no_moveit.json`。
-5. TelePreview mode：已完成第一版 Gazebo/FK preview gate，見 `docs/telepreview_preview_gate_zh.md`、`configs/telepreview_gate_hybrid.json`、`docker/telepreview-preview-gate.py`。
+5. TelePreview mode：已完成 Gazebo/FK preview gate 與 `APPROVE_WITH_WARNINGS -> prepose + retiming -> APPROVE` 自動流程，見 `docs/telepreview_preview_gate_zh.md`、`configs/telepreview_gate_hybrid.json`、`docker/telepreview-preview-gate.py`、`docker/telepreview-auto-gate-retime.py`。
 6. MIRROR-style parallel candidate IK：作為高階即時化改造。
 
 ## 已完成 baseline 摘要
@@ -96,5 +96,6 @@ RGB-D / SMPL-X reconstructed human motion
 | 方法 | 輸入 | Decision | Hard gates | Soft warnings |
 |---|---|---|---|---|
 | TelePreview-gated hybrid | SEW + functional hybrid trajectory | APPROVE_WITH_WARNINGS | TCP max error、table clearance、URDF joint limits、joint-step p95 全通過 | 有幾幀貼近 joint limit；第 0 幀到第 1 幀 single-frame jump 過大，建議 prepose/retiming |
+| TelePreview auto-retimed hybrid | 同一條 hybrid trajectory | APPROVE | TCP max error 29.25 mm、table clearance、joint-limit margin、joint-step p95 全通過 | 無 |
 
 TelePreview-gated hybrid 的重點不是改善 retargeting error，而是把「直接執行 hybrid」改成「先在 digital twin preview，通過 gate 後才執行」。這補上了 paper 中強調的 preview-before-execution 安全層。

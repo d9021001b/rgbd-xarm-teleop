@@ -23,6 +23,8 @@ Paper 用 AR overlay、AprilTag calibration 與虛擬 robot 對齊真實 robot�
 實作位置：
 
 - Script：`docker/telepreview-preview-gate.py`
+- Auto repair：`docker/telepreview-auto-gate-retime.py`
+- Retiming：`docker/telepreview-retime-trajectory.py`
 - Config：`configs/telepreview_gate_hybrid.json`
 - 本次輸出：`recordings/telepreview_gate_hybrid_20260513_211027/gate/`
 
@@ -104,3 +106,49 @@ SMPL-X / RGB-D fitted trajectory
 ```
 
 這次比較顯示 hybrid 的功能對應品質已經足夠好，hard safety 也通過；但 preview gate 抓到兩個 hybrid 指標本身不會強調的問題：關節貼近 limit、初始幀跳動太大。下一步若要接近 TelePreview paper 的完整精神，應該把 gate 後的 `APPROVE_WITH_WARNINGS` 自動接到 retiming 或 prepose planner，而不是直接執行原始 dense trajectory。
+
+## Auto Prepose + Retiming
+
+已完成自動流程：
+
+```text
+original trajectory
+-> TelePreview gate
+-> APPROVE_WITH_WARNINGS
+-> prepose hold + joint branch smoothing + step-limited retiming
+-> TelePreview gate again
+-> APPROVE
+```
+
+一鍵腳本：
+
+```bash
+python3 docker/telepreview-auto-gate-retime.py \
+  --xarm-json recordings/sew_functional_hybrid_20260513_195310/xarm7_sew_functional_hybrid_trajectory.json \
+  --retarget-config configs/xarm7_sew_functional_hybrid_no_moveit.json \
+  --gate-config configs/telepreview_gate_hybrid.json \
+  --comparison-summary recordings/sew_functional_hybrid_20260513_195310/comparison/trajectory_comparison_summary.json \
+  --out-dir recordings/telepreview_auto_gate_retime_hybrid
+```
+
+本次輸出：
+
+```text
+recordings/telepreview_auto_gate_retime_hybrid_20260513_214806/output/
+```
+
+結果摘要：
+
+| 指標 | 原始 hybrid | Auto prepose + retimed |
+|---|---:|---:|
+| Gate decision | APPROVE_WITH_WARNINGS | APPROVE |
+| Points | 181 | 209 |
+| Seconds | 18.0 s | 20.8 s |
+| TCP max error | 0.02284 m | 0.02925 m |
+| Joint step abs max | 5.841 rad/frame | 0.449 rad/frame |
+| Joint step p95 | 0.560 rad/frame | 0.393 rad/frame |
+| Joint velocity p95 | 5.60 rad/s | 3.93 rad/s |
+| Joint acceleration p95 | 76.12 rad/s² | 38.38 rad/s² |
+| Joint jerk RMS | 426.45 rad/s³ | 107.03 rad/s³ |
+
+這裡有一個很重要的設計取捨：retiming 插入的 transition frames 是「安全抵達」軌跡，不再宣稱逐幀對應原始人體動作時間軸；真正的人體 retarget fidelity 仍在原始 source keyframes 上檢查。這比較接近 TelePreview paper 的 align mode：使用者先 preview，確認後系統生成一條安全、平順的執行軌跡。

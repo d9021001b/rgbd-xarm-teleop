@@ -156,7 +156,9 @@ check before execution. It evaluates a solved xArm trajectory for TCP error,
 table clearance, joint-limit margin, joint step/smoothness, and functional
 right-arm matching, then returns `APPROVE`, `APPROVE_WITH_WARNINGS`, or
 `BLOCK`. See `docs/telepreview_preview_gate_zh.md` and
-`configs/telepreview_gate_hybrid.json`.
+`configs/telepreview_gate_hybrid.json`. `docker/telepreview-auto-gate-retime.py`
+turns `APPROVE_WITH_WARNINGS` into an automatic prepose + retiming pass, then
+runs the gate again before execution.
 
 ## Notes
 

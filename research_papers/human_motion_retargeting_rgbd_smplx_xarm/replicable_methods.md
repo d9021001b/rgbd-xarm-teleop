@@ -48,7 +48,7 @@ D455 / taichi video
 | SEW-Mimic-style baseline | shoulder-elbow-wrist closed-form / geometric solver | 每幀時間、姿態相似度、是否可達 |
 | RGB-D DLS baseline | MediaPipe + depth deprojection + DLS IK，不經 SMPL-X 姿態控制 | 與 SMPL-X / SEW / functional 中介比較速度、TCP 精度與手臂姿態一致性 |
 | MIRROR-style candidate IK | 多 seed / continuation / safety candidate selection | local minima、self-insertion、解算時間 |
-| TelePreview mode | preview-only -> execute gate | 安全性、demo 可解釋性 |
+| TelePreview mode | preview-only -> execute gate | 安全性、demo 可解釋性、執行前品質檢查 |
 
 ## 我們應該主打的創新比較語句
 
@@ -77,7 +77,7 @@ RGB-D / SMPL-X reconstructed human motion
 2. SEW-Mimic-style solver：已完成第一版 geometric elbow-swivel baseline，見 `docs/sew_mimic_style_baseline_zh.md` 與 `configs/xarm7_sew_mimic_baseline_no_moveit.json`。
 3. SEW + functional hybrid：已完成第一版 SEW seed + null-space correction，見 `docs/sew_functional_hybrid_zh.md` 與 `configs/xarm7_sew_functional_hybrid_no_moveit.json`。
 4. RGB-D DLS baseline：已完成第一版 hand/TCP-only DLS baseline，見 `docs/rgbd_dls_baseline_zh.md` 與 `configs/xarm7_rgbd_dls_baseline_no_moveit.json`。
-5. TelePreview mode：把 Gazebo preview gate 做成正式展示流程。
+5. TelePreview mode：已完成第一版 Gazebo/FK preview gate，見 `docs/telepreview_preview_gate_zh.md`、`configs/telepreview_gate_hybrid.json`、`docker/telepreview-preview-gate.py`。
 6. MIRROR-style parallel candidate IK：作為高階即時化改造。
 
 ## 已完成 baseline 摘要
@@ -90,3 +90,11 @@ RGB-D / SMPL-X reconstructed human motion
 | RGB-D DLS baseline | RGB-D hand target + DLS TCP-only IK + EMA | 6.07 s | 8.35 mm / 48.70 mm | 17.33 deg | 56.30 deg | 57.63 deg |
 
 目前結論：RGB-D DLS 是最快的直接 hand-shadowing baseline，但因為只追 TCP，不會自然保證上臂/前臂構型像人；SEW + functional hybrid 在速度仍可接受的情況下，對 included-angle 與 forearm functional matching 最穩。
+
+## 已完成 preview gate 摘要
+
+| 方法 | 輸入 | Decision | Hard gates | Soft warnings |
+|---|---|---|---|---|
+| TelePreview-gated hybrid | SEW + functional hybrid trajectory | APPROVE_WITH_WARNINGS | TCP max error、table clearance、URDF joint limits、joint-step p95 全通過 | 有幾幀貼近 joint limit；第 0 幀到第 1 幀 single-frame jump 過大，建議 prepose/retiming |
+
+TelePreview-gated hybrid 的重點不是改善 retargeting error，而是把「直接執行 hybrid」改成「先在 digital twin preview，通過 gate 後才執行」。這補上了 paper 中強調的 preview-before-execution 安全層。

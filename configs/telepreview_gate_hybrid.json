@@ -1,0 +1,34 @@
+{
+  "schema": "telepreview_preview_gate/v1",
+  "paper_reference": "TelePreview: A User-Friendly Teleoperation System with Virtual Arm Assistance for Enhanced Effectiveness",
+  "description": "Preview gate for the SEW + functional hybrid xArm7 trajectory. It emulates TelePreview's preview-only then align/execute state transition using Gazebo/FK safety checks instead of physical AR overlay.",
+  "preview_gate": {
+    "mode": "preview_then_align",
+    "virtual_preview": {
+      "representation": "Gazebo digital twin aligned to the xArm7 link_base frame",
+      "calibration_source": "Existing robot_world/base transform and D455 Gazebo scene; AprilTag calibration is the physical-world equivalent in the paper."
+    },
+    "min_tcp_z_base": 0.09,
+    "hard_gates": {
+      "max_tcp_error_m": 0.03,
+      "min_table_clearance_m": 0.0,
+      "min_joint_limit_margin_rad": 0.0,
+      "max_joint_step_p95_rad": 0.65
+    },
+    "soft_gates": {
+      "min_joint_limit_margin_warn_rad": 0.025,
+      "max_joint_step_abs_rad": 0.9,
+      "max_joint_velocity_p95_rad_s": 6.0,
+      "max_joint_acceleration_p95_rad_s2": 85.0,
+      "max_joint_jerk_rms_rad_s3": 500.0,
+      "max_included_angle_mean_deg": 8.0,
+      "max_forearm_mean_max_deg": 35.0,
+      "max_upper_arm_mean_max_deg": 45.0
+    },
+    "decision_policy": {
+      "APPROVE": "All hard and soft gates pass.",
+      "APPROVE_WITH_WARNINGS": "Hard safety gates pass, but soft smoothness or functional-quality gates recommend retiming or review.",
+      "BLOCK": "At least one hard safety gate fails; keep the motion in preview mode and do not execute."
+    }
+  }
+}

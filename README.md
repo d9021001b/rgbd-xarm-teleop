@@ -41,7 +41,8 @@ the retargeting code path:
 - The Gazebo SMPL-X visual mesh and texture files under
   `xarm_ros2/xarm_gazebo/models/smplx_operator/meshes/`.
 - Retargeting scripts, calibration configs, OCRA-style, SEW-Mimic-style,
-  RGB-D DLS, and SEW-functional hybrid baseline configs, and documentation.
+  RGB-D DLS, SEW-functional hybrid baseline configs, TelePreview preview-gate
+  tooling, and documentation.
 
 The following files are intentionally **not** tracked in git. Users who need
 the full HMR / SMPLify-X / mesh-fitting pipeline must download or generate
@@ -149,6 +150,13 @@ ros2 launch xarm_gazebo xarm7_beside_table_gazebo.launch.py add_soft_gripper:=tr
   frame sequence for ready/reach/descend/grasp/lift, and
   `xarm7-gazebo-dev record-smplx-animation-d455` plays that sequence inside
   Gazebo so the tripod D455 sees a moving SMPL-X mesh rather than a static OBJ.
+
+TelePreview-style preview gating is implemented as an offline/digital-twin
+check before execution. It evaluates a solved xArm trajectory for TCP error,
+table clearance, joint-limit margin, joint step/smoothness, and functional
+right-arm matching, then returns `APPROVE`, `APPROVE_WITH_WARNINGS`, or
+`BLOCK`. See `docs/telepreview_preview_gate_zh.md` and
+`configs/telepreview_gate_hybrid.json`.
 
 ## Notes
 

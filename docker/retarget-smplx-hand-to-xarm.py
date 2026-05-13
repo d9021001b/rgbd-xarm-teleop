@@ -1589,6 +1589,66 @@ def full_arm_elbow_target_base(wrist_base, shoulder_base, elbow_base):
     return shoulder_anchor + upper_length * elbow_dir
 
 
+def sew_mimic_elbow_target_base(wrist_base, shoulder_base, elbow_base):
+    config = RETARGET_RUNTIME_CONFIG.get("sew_mimic", {})
+    shoulder_anchor = vector3(
+        config.get("robot_shoulder_anchor_base", robot_shoulder_anchor_base().tolist()),
+        "sew_mimic.robot_shoulder_anchor_base",
+    )
+    upper_length = float(config.get("robot_upper_arm_length", 0.30))
+    lower_length = float(config.get("robot_forearm_length", 0.34))
+
+    wrist_base = np.asarray(wrist_base, dtype=float)
+    shoulder_base = np.asarray(shoulder_base, dtype=float)
+    elbow_base = np.asarray(elbow_base, dtype=float)
+
+    source_rotation = functional_source_vector_rotation_base()
+    human_upper = source_rotation @ (elbow_base - shoulder_base)
+    human_lower = source_rotation @ (wrist_base - elbow_base)
+    human_line = normalized(human_upper + human_lower, wrist_base - shoulder_anchor)
+
+    robot_line_vector = wrist_base - shoulder_anchor
+    robot_line = normalized(robot_line_vector, human_line)
+    wrist_distance = float(np.linalg.norm(robot_line_vector))
+    min_reach = abs(upper_length - lower_length) + 1e-5
+    max_reach = upper_length + lower_length - 1e-5
+    clamped_distance = float(np.clip(wrist_distance, min_reach, max_reach))
+
+    # SEW-Mimic's useful redundancy variable is the elbow swivel around the
+    # shoulder-wrist line. This maps that swivel to the robot's reachable
+    # shoulder/elbow/wrist triangle via the law of cosines.
+    along = (upper_length * upper_length - lower_length * lower_length + clamped_distance * clamped_distance) / (
+        2.0 * clamped_distance
+    )
+    radius = math.sqrt(max(0.0, upper_length * upper_length - along * along))
+    circle_center = shoulder_anchor + along * robot_line
+
+    bend = human_upper - np.dot(human_upper, human_line) * human_line
+    bend = bend - np.dot(bend, robot_line) * robot_line
+    fallback = np.cross([0.0, 0.0, 1.0], robot_line)
+    if np.linalg.norm(fallback) < 1e-6:
+        fallback = np.cross([0.0, 1.0, 0.0], robot_line)
+    bend_dir = normalized(bend, fallback)
+    bend_dir *= float(config.get("bend_direction_scale", 1.0))
+    bend_dir = normalized(bend_dir, fallback)
+
+    elbow_target = circle_center + radius * bend_dir
+    human_included = included_angle(human_upper, human_lower)
+    robot_included = included_angle(elbow_target - shoulder_anchor, wrist_base - elbow_target)
+    metrics = {
+        "sew_elbow_target_base": elbow_target,
+        "sew_circle_center_base": circle_center,
+        "sew_bend_direction_base": bend_dir,
+        "sew_wrist_distance_m": wrist_distance,
+        "sew_clamped_wrist_distance_m": clamped_distance,
+        "sew_reach_was_clamped": bool(abs(wrist_distance - clamped_distance) > 1e-6),
+        "sew_human_included_angle_deg": math.degrees(human_included),
+        "sew_robot_target_included_angle_deg": math.degrees(robot_included),
+        "sew_included_angle_target_abs_error_deg": abs(math.degrees(human_included - robot_included)),
+    }
+    return elbow_target, metrics
+
+
 def robot_shoulder_anchor_base():
     functional_config = RETARGET_RUNTIME_CONFIG.get("functional", {})
     full_arm_config = RETARGET_RUNTIME_CONFIG.get("full_arm", {})
@@ -1953,6 +2013,7 @@ def build_trajectory(chain, seed, seconds, fps, reconstructed_trajectory=None, c
         wrist_base = None
         elbow_base = None
         shoulder_base = None
+        sew_mimic_metrics = None
         if reconstructed_trajectory is not None:
             if cup_constrained:
                 point_world, phase = cup_constrained_world_target(reconstructed_trajectory, t)
@@ -1970,6 +2031,7 @@ def build_trajectory(chain, seed, seconds, fps, reconstructed_trajectory=None, c
                     "functional_hierarchical",
                     "table_edge_soft_functional",
                     "ocra_baseline",
+                    "sew_mimic_geometric",
                 ) and arm.get("right_elbow_world") is not None:
                     wrist_base = observed_target
                     elbow_base = global_workspace_transform_base(world_to_robot_base(arm["right_elbow_world"]))
@@ -1984,6 +2046,12 @@ def build_trajectory(chain, seed, seconds, fps, reconstructed_trajectory=None, c
                         desired_rotation = forearm_aligned_rotation_base(wrist_base, elbow_base, shoulder_base)
                     if orientation_mode in ("full_arm_aligned", "full_arm_hierarchical") and shoulder_base is not None:
                         full_arm_elbow_target = full_arm_elbow_target_base(wrist_base, shoulder_base, elbow_base)
+                    elif orientation_mode == "sew_mimic_geometric" and shoulder_base is not None:
+                        full_arm_elbow_target, sew_mimic_metrics = sew_mimic_elbow_target_base(
+                            wrist_base,
+                            shoulder_base,
+                            elbow_base,
+                        )
             if cup_constrained:
                 if t < controller_blend_in:
                     alpha = smoothstep(t / controller_blend_in)
@@ -2220,6 +2288,33 @@ def build_trajectory(chain, seed, seconds, fps, reconstructed_trajectory=None, c
                             if cscore < best[0]:
                                 best = (cscore, cq, cconverged, cerror, corientation, celbow, cmetrics)
                         _, q, converged, error, orientation_error, elbow_error, functional_metrics = best
+            elif orientation_mode == "sew_mimic_geometric" and full_arm_elbow_target is not None:
+                sew_config = RETARGET_RUNTIME_CONFIG.get("sew_mimic", {})
+                elbow_joint_index = int(sew_config.get("robot_elbow_joint_index", robot_elbow_joint_index()))
+                q, converged, error, orientation_error, elbow_error = chain.solve_full_arm_hierarchical(
+                    target,
+                    desired_rotation,
+                    full_arm_elbow_target,
+                    q,
+                    elbow_joint_index=elbow_joint_index,
+                    iterations=int(sew_config.get("max_iterations", ik_config.get("max_iterations", 80))),
+                    primary_damping=float(sew_config.get("primary_damping", 0.040)),
+                    secondary_damping=float(sew_config.get("secondary_damping", 0.070)),
+                    position_tolerance=float(ik_config.get("position_tolerance", 0.010)),
+                    orientation_tolerance=float(ik_config.get("orientation_tolerance", 0.22)),
+                    elbow_tolerance=float(sew_config.get("elbow_tolerance", 0.080)),
+                    orientation_weight=float(sew_config.get("orientation_weight", ik_config.get("orientation_weight", 0.10))),
+                    elbow_weight=float(sew_config.get("elbow_weight", 0.30)),
+                    secondary_step_scale=float(sew_config.get("secondary_step_scale", 1.0)),
+                    max_step=float(sew_config.get("max_step", 0.060)),
+                )
+                solver_metrics = dict(sew_mimic_metrics or {})
+                _, joint_positions_for_metrics, _ = chain.fk(q)
+                solver_metrics["sew_elbow_target_error_m"] = float(
+                    np.linalg.norm(full_arm_elbow_target - joint_positions_for_metrics[elbow_joint_index])
+                )
+                functional_metrics = compute_functional_metrics(chain, q, wrist_base, elbow_base, shoulder_base)
+                functional_metrics.update(solver_metrics)
             elif orientation_mode == "full_arm_hierarchical" and full_arm_elbow_target is not None:
                 full_arm_config = RETARGET_RUNTIME_CONFIG.get("full_arm", {})
                 q, converged, error, orientation_error, elbow_error = chain.solve_full_arm_hierarchical(
@@ -2299,7 +2394,7 @@ def build_trajectory(chain, seed, seconds, fps, reconstructed_trajectory=None, c
             solver_metric_overrides = {
                 key: value
                 for key, value in (functional_metrics or {}).items()
-                if key.startswith("ocra_")
+                if key.startswith(("ocra_", "sew_"))
             }
             functional_metrics = compute_functional_metrics(chain, q, wrist_base, elbow_base, shoulder_base)
             functional_metrics.update(solver_metric_overrides)
@@ -2313,6 +2408,8 @@ def build_trajectory(chain, seed, seconds, fps, reconstructed_trajectory=None, c
             elif orientation_mode == "ocra_baseline":
                 orientation_error = float(functional_metrics.get("ocra_orientation_norm_rad", orientation_error or 0.0))
                 elbow_error = float(functional_metrics.get("ocra_skeleton_rmse_m", elbow_error or 0.0))
+            elif orientation_mode == "sew_mimic_geometric":
+                elbow_error = float(functional_metrics.get("sew_elbow_target_error_m", elbow_error or 0.0))
         diagnostics.append(
             {
                 "time": round(t, 4),
@@ -2800,6 +2897,7 @@ def main():
             wrist_base = None
             elbow_base = None
             shoulder_base = None
+            sew_mimic_metrics = None
             if orientation_mode in (
                 "forearm_aligned",
                 "full_arm_aligned",
@@ -2807,6 +2905,7 @@ def main():
                 "functional_hierarchical",
                 "table_edge_soft_functional",
                 "ocra_baseline",
+                "sew_mimic_geometric",
             ) and arm.get("right_elbow_world") is not None:
                 wrist_base = target
                 elbow_base = global_workspace_transform_base(world_to_robot_base(arm["right_elbow_world"]))
@@ -2821,11 +2920,44 @@ def main():
                     desired_rotation = forearm_aligned_rotation_base(wrist_base, elbow_base, shoulder_base)
                 if orientation_mode in ("full_arm_aligned", "full_arm_hierarchical") and shoulder_base is not None:
                     full_arm_elbow_target = full_arm_elbow_target_base(wrist_base, shoulder_base, elbow_base)
+                elif orientation_mode == "sew_mimic_geometric" and shoulder_base is not None:
+                    full_arm_elbow_target, sew_mimic_metrics = sew_mimic_elbow_target_base(
+                        wrist_base,
+                        shoulder_base,
+                        elbow_base,
+                    )
             ik_config = RETARGET_RUNTIME_CONFIG.get("ik", {})
             if orientation_mode == "free_wrist_position_only":
                 q, converged, error = chain.solve_position(target, current_q)
                 orientation_error = None
                 elbow_error = None
+            elif orientation_mode == "sew_mimic_geometric" and full_arm_elbow_target is not None:
+                sew_config = RETARGET_RUNTIME_CONFIG.get("sew_mimic", {})
+                elbow_joint_index = int(sew_config.get("robot_elbow_joint_index", robot_elbow_joint_index()))
+                q, converged, error, orientation_error, elbow_error = chain.solve_full_arm_hierarchical(
+                    target,
+                    desired_rotation,
+                    full_arm_elbow_target,
+                    current_q,
+                    elbow_joint_index=elbow_joint_index,
+                    iterations=int(sew_config.get("max_iterations", ik_config.get("max_iterations", 80))),
+                    primary_damping=float(sew_config.get("primary_damping", 0.040)),
+                    secondary_damping=float(sew_config.get("secondary_damping", 0.070)),
+                    position_tolerance=float(ik_config.get("position_tolerance", 0.010)),
+                    orientation_tolerance=float(ik_config.get("orientation_tolerance", 0.22)),
+                    elbow_tolerance=float(sew_config.get("elbow_tolerance", 0.080)),
+                    orientation_weight=float(sew_config.get("orientation_weight", ik_config.get("orientation_weight", 0.10))),
+                    elbow_weight=float(sew_config.get("elbow_weight", 0.30)),
+                    secondary_step_scale=float(sew_config.get("secondary_step_scale", 1.0)),
+                    max_step=float(sew_config.get("max_step", 0.060)),
+                )
+                solver_metrics = dict(sew_mimic_metrics or {})
+                _, joint_positions_for_metrics, _ = chain.fk(q)
+                solver_metrics["sew_elbow_target_error_m"] = float(
+                    np.linalg.norm(full_arm_elbow_target - joint_positions_for_metrics[elbow_joint_index])
+                )
+                functional_metrics = compute_functional_metrics(chain, q, wrist_base, elbow_base, shoulder_base)
+                functional_metrics.update(solver_metrics)
             elif orientation_mode == "ocra_baseline" and shoulder_base is not None and elbow_base is not None:
                 ocra_config = RETARGET_RUNTIME_CONFIG.get("ocra", {})
                 q, converged, error, orientation_error, elbow_error, functional_metrics = chain.solve_ocra_baseline(
@@ -2995,10 +3127,16 @@ def main():
                         f" ocra_rmse={functional_metrics['ocra_skeleton_rmse_m']:.3f}"
                         f" ocra_obj={functional_metrics.get('ocra_objective', 0.0):.3f}"
                     )
+                sew_text = ""
+                if "sew_elbow_target_error_m" in functional_metrics:
+                    sew_text = (
+                        f" sew_elbow={functional_metrics['sew_elbow_target_error_m']:.3f}"
+                        f" sew_clamped={functional_metrics.get('sew_reach_was_clamped', False)}"
+                    )
                 functional_text = (
                     f" forearm_deg={forearm_deg} upper_deg={upper_deg}"
                     f" anti={anti_penalty:.3f} align={anti_alignment:.3f} tool={tool_alignment:.3f}"
-                    f"{ocra_text}"
+                    f"{ocra_text}{sew_text}"
                 )
             print(
                 f"prepose phase={loaded_trajectory_phase_prefix()}-{observed_phase} "
@@ -3074,6 +3212,17 @@ def main():
                     f"orientation_mean_rad={mean_ocra_orientation:.3f} orientation_max_rad={max_ocra_orientation:.3f} "
                     f"objective_mean={mean_ocra_objective:.4f}"
                 )
+            sew_items = [item for item in functional_items if "sew_elbow_target_error_m" in item]
+            if sew_items:
+                mean_sew_elbow = sum(float(item["sew_elbow_target_error_m"]) for item in sew_items) / len(sew_items)
+                max_sew_elbow = max(float(item["sew_elbow_target_error_m"]) for item in sew_items)
+                clamped_count = sum(1 for item in sew_items if bool(item.get("sew_reach_was_clamped", False)))
+                mean_sew_included = sum(float(item["sew_included_angle_target_abs_error_deg"]) for item in sew_items) / len(sew_items)
+                print(
+                    "sew_mimic_geometric "
+                    f"elbow_target_mean_m={mean_sew_elbow:.4f} elbow_target_max_m={max_sew_elbow:.4f} "
+                    f"target_included_mean_deg={mean_sew_included:.1f} reach_clamped_frames={clamped_count}"
+                )
         for item in diagnostics[:: max(1, int(args.fps))]:
             orientation_text = ""
             if item["orientation_error"] is not None:
@@ -3095,10 +3244,16 @@ def main():
                         f" ocra_rmse={functional['ocra_skeleton_rmse_m']:.3f}"
                         f" ocra_obj={functional.get('ocra_objective', 0.0):.3f}"
                     )
+                sew_text = ""
+                if "sew_elbow_target_error_m" in functional:
+                    sew_text = (
+                        f" sew_elbow={functional['sew_elbow_target_error_m']:.3f}"
+                        f" sew_clamped={functional.get('sew_reach_was_clamped', False)}"
+                    )
                 functional_text = (
                     f" forearm_deg={forearm_deg} upper_deg={upper_deg}"
                     f" anti={anti_penalty:.3f} align={anti_alignment:.3f} tool={tool_alignment:.3f}"
-                    f"{ocra_text}"
+                    f"{ocra_text}{sew_text}"
                 )
             print(
                 f"{item['time']:>5.2f}s {item['phase']:<19} "

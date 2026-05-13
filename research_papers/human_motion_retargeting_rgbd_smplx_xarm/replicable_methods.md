@@ -74,7 +74,7 @@ RGB-D / SMPL-X reconstructed human motion
 ## 下一步復刻順序
 
 1. OCRA-style baseline：已完成第一版復刻，見 `docs/ocra_style_baseline_zh.md` 與 `configs/xarm7_ocra_baseline_no_moveit.json`。
-2. SEW-Mimic-style solver：最有價值，因為能直接對付目前每幀約秒級的瓶頸。
+2. SEW-Mimic-style solver：已完成第一版 geometric elbow-swivel baseline，見 `docs/sew_mimic_style_baseline_zh.md` 與 `configs/xarm7_sew_mimic_baseline_no_moveit.json`。
 3. RGB-D DLS baseline：建立不經 SMPL-X 的對照組，證明 SMPL-X 中介是否值得。
 4. TelePreview mode：把 Gazebo preview gate 做成正式展示流程。
 5. MIRROR-style parallel candidate IK：作為高階即時化改造。
